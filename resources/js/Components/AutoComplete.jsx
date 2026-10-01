@@ -17,10 +17,12 @@ import React, { useEffect, useRef, useState } from 'react';
  * - className: string (clases extra para el input)
  */
 export default function AutoComplete({
+  inputRef,
   searchRouteName,
   initialItems = [],
   formatItem = (it) => String(it?.nombre ?? ''),
   onSelect,
+  onEnterKey,
   defaultText = '',
   placeholder = 'Buscar…',
   disabled = false,
@@ -77,27 +79,46 @@ export default function AutoComplete({
   }
 
   function onKeyDown(e) {
-    if (!open) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') setOpen(true);
-      return;
-    }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setHi((i) => Math.min(i + 1, items.length - 1));
-    } else if (e.key === 'ArrowUp') {
+      if (!open) {
+        setOpen(true);
+      } else {
+        setHi((i) => Math.min(i + 1, items.length - 1));
+      }
+      return;
+    }
+    if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setHi((i) => Math.max(i - 1, 0));
-    } else if (e.key === 'Enter') {
+      if (!open) {
+        setOpen(true);
+      } else {
+        setHi((i) => Math.max(i - 1, 0));
+      }
+      return;
+    }
+    if (e.key === 'Enter') {
       e.preventDefault();
-      if (items[hi]) pick(items[hi]);
-    } else if (e.key === 'Escape') {
+      if (open && hi >= 0 && items[hi]) {
+        pick(items[hi]);
+      } else if (open && items.length > 0) {
+        pick(items[0]);
+      } else {
+        setOpen(false);
+        onEnterKey?.();
+      }
+      return;
+    }
+    if (e.key === 'Escape') {
       setOpen(false);
+      return;
     }
   }
 
   return (
-    <div className="relative" ref={boxRef}>
+    <div className="relative" ref={boxRef} data-autocomplete="true">
       <input
+        ref={inputRef}
         type="text"
         disabled={disabled}
         value={input}

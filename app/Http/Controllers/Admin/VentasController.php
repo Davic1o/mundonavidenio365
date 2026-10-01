@@ -188,23 +188,28 @@ class VentasController extends Controller
     }
 
     /** Siguiente secuencial con bloqueo (usar dentro de una transacción) */
-    protected function siguienteSecuencialConLock(string $estab, string $ptoEmi): string
+    protected function siguienteSecuencialConLock(string $estab, string $ptoEmi, ?int $minSecuencial = null): string
     {
-        $last = DB::table('ventas')
+        // 1. Obtener el secuencial numérico más alto en la BD para este estab y pto_emision
+        $maxDb = DB::table('ventas')
             ->where('estab', $estab)
             ->where('pto_emision', $ptoEmi)
             ->whereNotNull('secuencial')
             ->lockForUpdate()
-            ->orderByDesc('secuencial')
-            ->value('secuencial');
+            ->selectRaw('MAX(CAST(secuencial AS UNSIGNED)) as max_sec')
+            ->value('max_sec');
 
-        if ($last) {
-            $nextInt = ((int) $last) + 1;
-        } else {
-            // Si no hay ventas, usamos el secuencial inicial configurado en la empresa
-            $e = DB::table('empresas')->select('secuencial_factura')->first();
-            $nextInt = ($e && !empty($e->secuencial_factura)) ? max(1, (int)$e->secuencial_factura) : 1;
-        }
+        $maxDbInt = $maxDb ? (int)$maxDb : 0;
+
+        // 2. Obtener el secuencial inicial configurado en la empresa
+        $e = DB::table('empresas')->select('secuencial_factura')->first();
+        $cfgSec = ($e && !empty($e->secuencial_factura)) ? (int)$e->secuencial_factura : 1;
+
+        // 3. Si se pasa un secuencial mínimo a superar (por ejemplo, el que fue rechazado por el SRI)
+        $minSec = $minSecuencial ? (int)$minSecuencial : 0;
+
+        $base = max($maxDbInt, $cfgSec - 1, $minSec);
+        $nextInt = max(1, $base + 1);
 
         return $this->padSecuencial($nextInt);
     }
@@ -222,15 +227,23 @@ class VentasController extends Controller
 
         $ventas = DB::table('ventas')
             ->leftJoin('clientes','clientes.id','=','ventas.cliente_id')
+            ->leftJoin('users as creadores','creadores.id','=','ventas.creada_por')
+            ->leftJoin('users as editores','editores.id','=','ventas.actualizada_por')
             ->select(
                 'ventas.id','ventas.fecha','ventas.estado',
+                'ventas.estab','ventas.pto_emision','ventas.secuencial',
                 'ventas.subtotal','ventas.impuesto_15','ventas.impuesto_0','ventas.descuento','ventas.total',
-                'clientes.nombres as cliente_nombres','clientes.ci_o_ruc as cliente_ci_o_ruc'
+                'ventas.creada_por','ventas.actualizada_por',
+                'clientes.nombres as cliente_nombres','clientes.ci_o_ruc as cliente_ci_o_ruc',
+                'creadores.name as creador_nombre','creadores.role as creador_rol',
+                'editores.name as editor_nombre','editores.role as editor_rol'
             )
             ->when($q !== '', function($qq) use ($q) {
                 $qq->where(function($w) use ($q){
                     $w->where('clientes.nombres','like',"%{$q}%")
-                      ->orWhere('clientes.ci_o_ruc','like',"%{$q}%");
+                      ->orWhere('clientes.ci_o_ruc','like',"%{$q}%")
+                      ->orWhereRaw("CONCAT(COALESCE(ventas.estab,''), '-', COALESCE(ventas.pto_emision,''), '-', COALESCE(ventas.secuencial,'')) LIKE ?", ["%{$q}%"])
+                      ->orWhere('ventas.secuencial','like',"%{$q}%");
                 });
             })
             ->when($estado !== '', fn($qq)=>$qq->where('ventas.estado',$estado))
@@ -260,7 +273,8 @@ class VentasController extends Controller
         }
 
         DB::transaction(function() use ($venta) {
-            // No incrementamos stock porque en estado 'creada' aún no se descuenta stock
+            $venta->eliminada_por = auth()->id();
+            $venta->save();
             $venta->delete();
         });
 
@@ -311,7 +325,7 @@ class VentasController extends Controller
 
     public function show($venta)
     {
-        $v = Venta::findOrFail($venta);
+        $v = Venta::with(['creador:id,name,role', 'actualizadoPor:id,name,role'])->findOrFail($venta);
         $cliente = $v->cliente_id ? Cliente::find($v->cliente_id) : null;
 
         $items = DB::table('venta_productos')
@@ -329,11 +343,15 @@ class VentasController extends Controller
         $empresa = $this->empresaInfo();
 
         $initial = [
-            'id'          => $v->id,
-            'cliente_id'  => $v->cliente_id,
-            'cliente'     => $cliente,
-            'fecha'       => $v->fecha,
-            'estado'      => $v->estado,
+            'id'              => $v->id,
+            'cliente_id'      => $v->cliente_id,
+            'cliente'         => $cliente,
+            'fecha'           => $v->fecha,
+            'estado'          => $v->estado,
+            'creada_por'      => $v->creada_por,
+            'actualizada_por' => $v->actualizada_por,
+            'creador'         => $v->creador,
+            'actualizadoPor'  => $v->actualizadoPor,
 
             'productosVendidos' => $items->map(fn($it) => [
                 'producto_id' => $it->producto_id,
@@ -464,24 +482,13 @@ class VentasController extends Controller
             ->selectRaw("$ivaExpr as iva")
             ->when($hasDeletedAt, fn($w)=>$w->whereNull('productos.deleted_at'));
 
-        if (preg_match('/^\d+$/', $q) === 1) {
-            $rows = (clone $baseQuery)
-                ->where('productos.id', (int)$q)
-                ->limit(1)
-                ->get()
-                ->map(function($r){
-                    $r->pvp = (float)($r->pvp ?? 0);
-                    $r->iva = in_array((int)$r->iva, [0,15], true) ? (int)$r->iva : 15;
-                    return $r;
-                });
-
-            return response()->json($rows);
-        }
-
         $rows = (clone $baseQuery)
             ->where(function($qq) use ($q){
                 $qq->where('productos.nombre','like',"%{$q}%")
                    ->orWhere('productos.codigo','like',"%{$q}%");
+                if (preg_match('/^\d+$/', $q) === 1) {
+                    $qq->orWhere('productos.id', (int)$q);
+                }
             })
             ->orderBy('productos.nombre')
             ->limit(20)
@@ -660,6 +667,7 @@ class VentasController extends Controller
             $v->impuesto_0  = $tot['impuesto_0'];
             $v->descuento   = $tot['descuento'];
             $v->total       = $tot['total'];
+            $v->actualizada_por = auth()->id();
             $v->save();
         });
 
@@ -791,6 +799,8 @@ class VentasController extends Controller
                     }
                 } else {
                     $venta = Venta::with(['cliente'])->findOrFail($request->route('venta'));
+                    $venta->actualizada_por = auth()->id();
+                    $venta->save();
                 }
 
                 /* 1) Reemplazar pagos */
@@ -936,5 +946,68 @@ class VentasController extends Controller
         $num = preg_replace('/\D/', '', (string)$id);
         if ($num === '9999999999999' || $num === '9999999999') return true;
         return $num !== '' && preg_match('/^9+$/', $num) === 1 && in_array(strlen($num), [10,13], true);
+    }
+
+    public function reautorizarSri(Venta $venta)
+    {
+        $estadoActual = strtoupper(trim((string)($venta->estado ?? '')));
+        if ($estadoActual === 'AUTORIZADO') {
+            return back()->with('info', 'Esta venta ya se encuentra autorizada por el SRI.');
+        }
+
+        $empresa = $this->empresaInfo();
+
+        // 1. Validaciones previas de consistencia de datos antes de enviar al SRI
+        $sriService = new SriFacturaService();
+        $errorValidacion = $sriService->validarDatosParaSri($venta, $empresa);
+        if ($errorValidacion !== null) {
+            return back()->with('error', 'Validación SRI: ' . $errorValidacion);
+        }
+
+        // 2. Asignar un nuevo secuencial libre y generar nueva clave de acceso
+        DB::transaction(function () use ($venta) {
+            $cfgNum = $this->numeracionConfig();
+            $estab  = $cfgNum['estab'];
+            $ptoEmi = $cfgNum['ptoEmi'];
+
+            // Tomamos el secuencial actual de la venta si existía para forzar que el nuevo sea superior
+            $prevSec = !empty($venta->secuencial) ? (int)$venta->secuencial : 0;
+            $sec     = $this->siguienteSecuencialConLock($estab, $ptoEmi, $prevSec);
+
+            $venta->secuencial   = $sec;
+            $venta->estab        = $estab;
+            $venta->pto_emision  = $ptoEmi;
+            $venta->numero       = $estab . '-' . $ptoEmi . '-' . $sec;
+            $venta->estado       = 'emitida';
+            $fechaEmision        = \Carbon\Carbon::now();
+            $venta->fecha        = $fechaEmision->toDateTimeString();
+
+            $cfg                 = $this->configEmisor($sec);
+            $venta->autorizacion = $this->generarClaveAcceso($fechaEmision, $cfg, '01');
+            $venta->actualizada_por = auth()->id();
+            $venta->save();
+
+            // Sincronizar secuencial en empresas para que futuras ventas no choquen
+            DB::table('empresas')->update([
+                'secuencial_factura' => DB::raw("GREATEST(COALESCE(secuencial_factura, 1), " . ((int)$sec + 1) . ")")
+            ]);
+        });
+
+        $venta->refresh();
+
+        // Si existía un archivo XML previo de esta venta, asegurar que contenga el campo RUC Proveedor
+        if (!empty($venta->sri_xml_path)) {
+            $prevPath = storage_path('app/public/' . $venta->sri_xml_path);
+            \App\Services\SriFacturaService::asegurarRucProveedorEnArchivoXml($prevPath);
+        }
+
+        // 3. Procesar ante el SRI con el nuevo secuencial y clave de acceso
+        $resultadoSRI = $sriService->procesarFacturaSRI($venta, $empresa, ['aplico' => false]);
+
+        if (!$resultadoSRI['success']) {
+            return back()->with('error', 'SRI: ' . $resultadoSRI['message']);
+        }
+
+        return back()->with('success', 'Venta autorizada correctamente ante el SRI (Factura: ' . $venta->numero . ').');
     }
 }

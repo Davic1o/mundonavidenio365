@@ -45,9 +45,9 @@ export default function NavbarPublic({ active = 'home' }) {
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
         {/* Brand Logo & Name */}
         <Link href={hrefHome} className="group flex items-center gap-3 transition-transform hover:scale-[1.01]">
-          <div className="relative">
-            <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-amber-400 to-emerald-600 opacity-30 blur group-hover:opacity-60 transition duration-300"></div>
-            <ApplicationLogo className="relative h-11 w-11 drop-shadow-md" />
+          <div className="relative flex items-center">
+            <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-amber-400 to-emerald-600 opacity-40 blur group-hover:opacity-70 transition duration-300"></div>
+            <ApplicationLogo className="relative h-10 w-auto max-h-10 object-contain" containerClassName="relative p-1.5 bg-white rounded-2xl shadow-md ring-1 ring-amber-400/30" />
           </div>
           <div className="leading-none">
             <div className="flex items-center gap-1.5">
@@ -122,7 +122,7 @@ export default function NavbarPublic({ active = 'home' }) {
       >
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 bg-slate-900 text-white">
           <div className="flex items-center gap-3">
-            <ApplicationLogo className="h-8 w-8" />
+            <ApplicationLogo className="h-8 w-auto max-h-8 object-contain" containerClassName="p-1 bg-white rounded-xl shadow-sm ring-1 ring-white/20" />
             <div>
               <div className="text-sm font-bold text-white">MUNDO NAVIDEÑO 365</div>
               <div className="text-[10px] text-amber-300">Gestión Empresarial</div>

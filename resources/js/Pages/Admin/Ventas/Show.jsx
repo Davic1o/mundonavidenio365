@@ -1,6 +1,7 @@
 import React, { useMemo, useEffect, useRef, useState } from 'react';
-import { Head, Link } from '@inertiajs/react';
+import { Head, Link, router } from '@inertiajs/react';
 import AdminLayout from '@/Layouts/AdminLayout';
+import useCan from '@/Hooks/useCan';
 import {
   FiChevronLeft,
   FiEdit2,
@@ -8,6 +9,7 @@ import {
   FiCreditCard,
   FiFileText,
   FiCheckCircle,
+  FiPlus,
 } from 'react-icons/fi';
 
 function fmtDate(iso) {
@@ -46,6 +48,9 @@ function BadgeEstado({ estado }) {
 }
 
 export default function Show({ initial }) {
+  const can = useCan();
+  const canEdit = can('ventas.edit');
+
   const v = initial ?? {};
   const cliente  = v.cliente ?? null;
   const items    = v.productosVendidos ?? [];
@@ -186,6 +191,15 @@ export default function Show({ initial }) {
     }
   };
 
+  const [loadingNuevaVenta, setLoadingNuevaVenta] = useState(false);
+
+  function nuevaVenta() {
+    setLoadingNuevaVenta(true);
+    router.get(route('admin.ventas.vista_cliente'), {}, {
+      onFinish: () => setLoadingNuevaVenta(false),
+    });
+  }
+
   const estadoNorm = normalizeEstado(v.estado);
   const esAutorizada = estadoNorm === 'autorizado';
 
@@ -211,25 +225,49 @@ export default function Show({ initial }) {
           </div>
 
           <div className="flex items-center gap-2">
-            {esAutorizada ? (
-              <button
-                type="button"
-                aria-disabled
-                title="Venta autorizada: solo lectura"
-                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-400 bg-slate-50 cursor-not-allowed"
-                onClick={(e) => e.preventDefault()}
-              >
-                <FiEdit2 className="h-4 w-4" />
-                Editar
-              </button>
-            ) : (
-              <Link
-                href={route('admin.ventas.vista_productos', v.id)}
-                className="inline-flex items-center gap-2 rounded-lg border border-primary-300 bg-primary-50 px-4 py-2.5 text-sm font-medium text-primary-700 shadow-sm transition-all hover:bg-primary-100"
-              >
-                <FiEdit2 className="h-4 w-4" />
-                Editar
-              </Link>
+            <button
+              type="button"
+              onClick={nuevaVenta}
+              disabled={loadingNuevaVenta}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white shadow-md transition-all hover:bg-emerald-700 disabled:opacity-75"
+            >
+              {loadingNuevaVenta ? (
+                <>
+                  <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span>Abriendo nueva venta...</span>
+                </>
+              ) : (
+                <>
+                  <FiPlus className="h-4 w-4" />
+                  <span>Nueva venta</span>
+                </>
+              )}
+            </button>
+
+            {canEdit && (
+              esAutorizada ? (
+                <button
+                  type="button"
+                  aria-disabled
+                  title="Venta autorizada: solo lectura"
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-400 bg-slate-50 cursor-not-allowed"
+                  onClick={(e) => e.preventDefault()}
+                >
+                  <FiEdit2 className="h-4 w-4" />
+                  Editar
+                </button>
+              ) : (
+                <Link
+                  href={route('admin.ventas.vista_productos', v.id)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-primary-300 bg-primary-50 px-4 py-2.5 text-sm font-medium text-primary-700 shadow-sm transition-all hover:bg-primary-100"
+                >
+                  <FiEdit2 className="h-4 w-4" />
+                  Editar
+                </Link>
+              )
             )}
 
             <button

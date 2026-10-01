@@ -1,6 +1,7 @@
 import React, { useMemo, useEffect, useRef, useState } from "react";
 import { Head, Link, useForm } from "@inertiajs/react";
 import AdminLayout from "@/Layouts/AdminLayout";
+import useCan from "@/Hooks/useCan";
 import {
   FiChevronLeft,
   FiEdit2,
@@ -58,6 +59,9 @@ function BadgeEstado({ estado, sriEstado }) {
 }
 
 export default function Show({ auth, nc, venta, cliente, empresa: propEmpresa, detalles = [], flash }) {
+  const can = useCan();
+  const canCreate = can('notas_credito.create');
+  const canSri = can('notas_credito.sri');
   const { post, processing } = useForm({});
   const sheetRef = useRef(null);
   const barcodeCanvasRef = useRef(null);
@@ -214,24 +218,28 @@ export default function Show({ auth, nc, venta, cliente, empresa: propEmpresa, d
               </span>
             ) : (
               <>
-                <Link
-                  href={route("admin.notas_credito.vista_items", nc.id)}
-                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50"
-                >
-                  <FiEdit2 className="h-4 w-4 text-slate-500" />
-                  Editar Ítems
-                </Link>
-
-                <form onSubmit={emitir}>
-                  <button
-                    type="submit"
-                    disabled={processing}
-                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50 transition-all"
+                {canCreate && (
+                  <Link
+                    href={route("admin.notas_credito.vista_items", nc.id)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:bg-slate-50"
                   >
-                    <FiRefreshCw className={`h-4 w-4 ${processing ? "animate-spin" : ""}`} />
-                    {processing ? "Emitiendo SRI..." : "Emitir / Firmar / SRI"}
-                  </button>
-                </form>
+                    <FiEdit2 className="h-4 w-4 text-slate-500" />
+                    Editar Ítems
+                  </Link>
+                )}
+
+                {canSri && (
+                  <form onSubmit={emitir}>
+                    <button
+                      type="submit"
+                      disabled={processing}
+                      className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50 transition-all"
+                    >
+                      <FiRefreshCw className={`h-4 w-4 ${processing ? "animate-spin" : ""}`} />
+                      {processing ? "Emitiendo SRI..." : "Emitir / Firmar / SRI"}
+                    </button>
+                  </form>
+                )}
               </>
             )}
 

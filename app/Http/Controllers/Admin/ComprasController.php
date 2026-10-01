@@ -10,6 +10,7 @@ use Illuminate\Support\Str; // si usas Str::startsWith para el patch de código 
 use App\Models\Producto;
 use App\Models\Proveedor;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 
 class ComprasController extends Controller
@@ -26,7 +27,12 @@ class ComprasController extends Controller
         $provQuery = trim($request->string('proveedor')->toString());
 
         $lotes = Lote::query()
-            ->with(['producto:id,nombre,codigo,cantidad_total', 'proveedor:id,nombre,ci_o_ruc'])
+            ->with([
+                'producto:id,nombre,codigo,cantidad_total',
+                'proveedor:id,nombre,ci_o_ruc',
+                'registradoPor:id,name,role',
+                'actualizadoPor:id,name,role',
+            ])
             ->when($q !== '', function ($qr) use ($q) {
                 $qr->whereHas('producto', function ($p) use ($q) {
                     $p->where('nombre', 'like', "%{$q}%");
@@ -68,65 +74,107 @@ class ComprasController extends Controller
      */
 public function store(Request $request)
 {
-
     $data = $request->validate([
-
-        // lote
-        'cantidad_compra'      => ['required','integer','min:1'],
-        'fecha_compra'         => ['required','date'],
-        'costo_general'        => ['nullable','numeric','min:0'],
-        // precios/costos
-        'precio_compra'        => ['required','numeric','min:0'],          // unitario base
-        'costo_transporte'     => ['nullable','numeric','min:0'],          // total
-        'precio_compra_final'  => ['required','numeric','min:0'],          // unitario final
-        'porcentaje_ganancia'  => ['nullable','numeric','min:0'],
+        'producto_id'          => ['nullable', 'exists:productos,id'],
+        'producto_nombre'      => ['nullable', 'string', 'max:255'],
+        'proveedor_id'         => ['nullable', 'exists:proveedores,id'],
+        'cantidad_compra'      => ['required', 'integer', 'min:1'],
+        'fecha_compra'         => ['required', 'date'],
+        'precio_compra'        => ['required', 'numeric', 'min:0'],
+        'costo_general'        => ['nullable', 'numeric', 'min:0'],
+        'costo_transporte'     => ['nullable', 'numeric', 'min:0'],
+        'porcentaje_ganancia'  => ['nullable', 'numeric', 'min:0'],
+        'comision_pct'         => ['nullable', 'numeric', 'min:0'],
+        'precio_compra_final'  => ['required', 'numeric', 'min:0'],
+        'valor_base_etiqueta'  => ['nullable', 'numeric', 'min:0'],
     ]);
     $userId = auth()->id();
-   // dd($request->producto_id);
 
     return DB::transaction(function () use ($data, $userId, $request) {
-        // 1) Resolver proveedor (crear si no existe)
-            $proveedor   = Proveedor::findOrFail($request->proveedor_id);
-        // 2) Producto (bloqueo pesimista para consistencia de stock)
-        $producto = Producto::where('id', (int) $request->producto_id)
-            ->lockForUpdate()
-            ->firstOrFail();
+        // 1) Proveedor
+        if ($request->filled('proveedor_id')) {
+            $proveedor = Proveedor::findOrFail($request->proveedor_id);
+        } elseif ($request->filled('proveedor.nombre') && $request->filled('proveedor.ci_o_ruc')) {
+            $provData = $request->input('proveedor');
+            $proveedor = Proveedor::firstOrCreate(
+                ['ci_o_ruc' => trim($provData['ci_o_ruc'])],
+                [
+                    'nombre' => trim($provData['nombre']),
+                    'telefono' => trim($provData['telefono'] ?? ''),
+                    'registrado_por' => $userId,
+                ]
+            );
+        } else {
+            return back()->withErrors(['proveedor_id' => 'Debe seleccionar o registrar un proveedor.']);
+        }
 
-        // 3) Cálculos
+        // 2) Producto: si no tiene producto_id pero ingresó nombre en "Nuevo"
+        if ($request->filled('producto_id')) {
+            $producto = Producto::where('id', (int) $request->producto_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+        } elseif ($request->filled('producto_nombre')) {
+            $producto = Producto::create([
+                'nombre'         => trim($request->producto_nombre),
+                'codigo'         => 'TMP-'.now()->format('ymd-His'),
+                'cantidad_total' => 0,
+                'registrado_por' => $userId,
+            ]);
+        } else {
+            return back()->withErrors(['producto_id' => 'Debe seleccionar o crear un producto.']);
+        }
+
+        // 3) Cálculos Sincronizados
         $cantidad           = (int) $data['cantidad_compra'];
         $unitBase           = (float) $data['precio_compra'];
-        $unitUnitario          = $unitBase+((float) ($data['costo_transporte']/100*$data['precio_compra'] ?? 0))+((float) ($data['costo_general']/100*$data['precio_compra'] ?? 0));
-        $unitFinal      =$unitUnitario+((float) ($data['porcentaje_ganancia']/100*$unitUnitario ?? 0));
-        $costoTransporte    = (float) ($data['costo_transporte'] ?? 0);
-        $costoGeneral       = (float) ($data['costo_general'] ?? 0);
+        $gastosPct          = (float) ($data['costo_general'] ?? 0);
+        $factor1Pct         = (float) ($data['costo_transporte'] ?? 0);
         $porcentajeGanancia = (float) ($data['porcentaje_ganancia'] ?? 0);
-        $precioTotal        = round($cantidad * $unitFinal , 2);
+        $comisionPct        = (float) ($data['comision_pct'] ?? 0);
+
+        // Desglose
+        if (!empty($data['valor_base_etiqueta']) && (float)$data['valor_base_etiqueta'] > 0) {
+            $valorBaseEtiqueta = (float) $data['valor_base_etiqueta'];
+        } else {
+            $gastosMonto        = $unitBase * ($gastosPct / 100);
+            $costoTotalProducto = $unitBase + $gastosMonto;
+            $factor1Monto       = $costoTotalProducto * ($factor1Pct / 100);
+            $subtotal1          = $costoTotalProducto + $factor1Monto;
+            $valorBaseEtiqueta  = $subtotal1 * (1 + ($comisionPct / 100));
+        }
+
+        $unitFinal          = (float) $data['precio_compra_final'];
+        $precioTotal        = round($cantidad * $unitFinal, 2);
 
         // 4) Año derivado de fecha_compra
         $anio = (int) date('Y', strtotime($data['fecha_compra']));
 
-        // 5) Generar/reemplazar código del producto si está vacío o es provisional "TMP-"
-        if (empty($producto->codigo) || Str::startsWith((string) $producto->codigo, 'TMP-')) {
-            $producto->codigo = $this->generarCodigoProducto($anio, $producto->id, $proveedor->id, $unitUnitario);
-            $producto->actualizado_por = $userId;
-            $producto->save();
-        }
+        // 5) Generar y asignar SIEMPRE el código generado al producto
+        $producto->codigo = $this->generarCodigoProducto($anio, $producto->id, $proveedor->id, $valorBaseEtiqueta);
+        $producto->actualizado_por = $userId;
+        $producto->save();
 
         // 6) Crear lote
-        $lote = Lote::create([
+        $loteData = [
             'producto_id'         => $producto->id,
             'proveedor_id'        => $proveedor->id,
             'cantidad_compra'     => $cantidad,
             'fecha_compra'        => $data['fecha_compra'],
             'anio'                => $anio,
             'precio_compra'       => $unitBase,
-            'costo_transporte'    => $costoTransporte,
-            'costo_general'       => $costoGeneral,
-            'precio_compra_final' => $unitFinal,
+            'costo_general'       => $gastosPct,
+            'costo_transporte'    => $factor1Pct,
             'porcentaje_ganancia' => $porcentajeGanancia,
+            'precio_compra_final' => $unitFinal,
             'precio_total'        => $precioTotal,
             'registrado_por'      => $userId,
-        ]);
+        ];
+
+        if (Schema::hasColumn('lotes', 'comision_pct')) {
+            $loteData['comision_pct'] = $comisionPct;
+        }
+
+        $lote = Lote::create($loteData);
 
         // 7) Actualizar stock total del producto
         $producto->increment('cantidad_total', $cantidad);
@@ -147,9 +195,12 @@ public function store(Request $request)
             'cantidad_compra'      => ['required','integer','min:1'],
             'fecha_compra'         => ['required','date'],
             'precio_compra'        => ['required','numeric','min:0'],
+            'costo_general'        => ['nullable','numeric','min:0'],
             'costo_transporte'     => ['nullable','numeric','min:0'],
             'precio_compra_final'  => ['required','numeric','min:0'],
             'porcentaje_ganancia'  => ['nullable','numeric','min:0'],
+            'comision_pct'         => ['nullable','numeric','min:0'],
+            'valor_base_etiqueta'  => ['nullable','numeric','min:0'],
         ]);
 
         $userId = auth()->id();
@@ -165,24 +216,33 @@ public function store(Request $request)
             $precioTotal = round($newCantidad * $unitFinal, 2);
             $anio        = (int) date('Y', strtotime($data['fecha_compra']));
 
-            $lote->update([
+            $updateData = [
                 'proveedor_id'        => (int) $data['proveedor_id'],
                 'cantidad_compra'     => $newCantidad,
                 'fecha_compra'        => $data['fecha_compra'],
                 'anio'                => $anio,
                 'precio_compra'       => (float) $data['precio_compra'],
+                'costo_general'       => (float) ($data['costo_general'] ?? 0),
                 'costo_transporte'    => (float) ($data['costo_transporte'] ?? 0),
                 'precio_compra_final' => $unitFinal,
                 'porcentaje_ganancia' => (float) ($data['porcentaje_ganancia'] ?? 0),
                 'precio_total'        => $precioTotal,
                 'actualizado_por'     => $userId,
-            ]);
+            ];
+
+            if (Schema::hasColumn('lotes', 'comision_pct')) {
+                $updateData['comision_pct'] = (float) ($data['comision_pct'] ?? 0);
+            }
+
+            $lote->update($updateData);
 
             // Ajuste de stock si cambia la cantidad
             if ($newCantidad !== $oldCantidad) {
                 $delta = $newCantidad - $oldCantidad;
                 $producto->increment('cantidad_total', $delta);
             }
+
+            // El código del producto se mantiene FIJO una vez creado
 
             return back()->with('success', 'Compra actualizada correctamente.');
         });
@@ -229,21 +289,12 @@ public function store(Request $request)
 
     /**
      * Genera código del producto: YY-productoId-proveedorId-INT-DEC
-     * INT y DEC provienen del precio total (redondeado a 2 decimales).
-     * Ej: total=3.45 => INT=3, DEC=45  => 25-4-8-3-45
+     * INT y DEC provienen del precio total de la etiqueta (redondeado a 2 decimales).
+     * Ej: total=3.45 => INT=3, DEC=45 => 25-4-8-3-45
      */
     protected function generarCodigoProducto(int $anio, int $productoId, int $proveedorId, float $precioTotal): string
     {
-        $yy = substr((string)$anio, -2);
-
-        $totalRedondeado = round($precioTotal, 2);
-        $entero  = (int) floor($totalRedondeado);
-        $decimales = (int) round(($totalRedondeado - $entero) * 100);
-
-        // normalizar decimales a dos dígitos
-        $decStr = str_pad((string)$decimales, 2, '0', STR_PAD_LEFT);
-
-        return "{$yy}-{$productoId}-{$proveedorId}-{$entero}-{$decStr}";
+        return Producto::generarCodigo($anio, $productoId, $proveedorId, $precioTotal);
     }
         /**
      * GET /admin/proveedores/buscar?q=texto
@@ -312,14 +363,17 @@ public function crearProducto(Request $request)
 {
     $data = $request->validate([
         'nombre' => ['required','string','max:255'],
+        'codigo' => ['nullable','string','max:100'],
     ]);
 
-    // Código provisional único (se reemplaza al registrar la compra)
-    $tmpCode = 'TMP-'.now()->format('ymd-His').'-'.mt_rand(100,999);
+    // Código proporcionado o provisional único (se reemplaza al registrar la compra si es TMP-)
+    $code = !empty($data['codigo'])
+        ? trim($data['codigo'])
+        : 'TMP-'.now()->format('ymd-His').'-'.mt_rand(100,999);
 
     $producto = Producto::create([
         'nombre'         => $data['nombre'],
-        'codigo'         => $tmpCode,
+        'codigo'         => $code,
         'cantidad_total' => 0,
         'registrado_por' => auth()->id(),
     ]);

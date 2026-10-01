@@ -68,9 +68,23 @@ public function share(Request $request): array
         }
     }
 
+    $userPermissions = $user ? $user->getAllPermissions() : [];
+
     return array_merge(parent::share($request), [
         'auth' => [
-            'user' => $user,
+            'user' => $user ? [
+                'id'          => $user->id,
+                'name'        => $user->name,
+                'email'       => $user->email,
+                'role'        => $user->role,
+                'permissions' => $userPermissions,
+            ] : null,
+            'isSuperAdmin'    => $user?->isSuperAdmin() ?? false,
+            'isAdminGeneral'  => $user?->isAdminGeneral() ?? false,
+            'isAdmin'         => in_array($user?->role, ['Superadmin', 'Admin General', 'Administrador'], true),
+            'isVentas'        => $user?->isVentas() ?? false,
+            'canManageRoles'  => $user?->isSuperAdmin() ?? false,
+            'permissions'     => $userPermissions,
         ],
 
         'flash' => [
@@ -81,8 +95,11 @@ public function share(Request $request): array
 
         // Capacidades rápidas para el front
         'ability' => [
-            'isAdmin'          => $user?->role === 'Administrador',
-            'canManageEmpresa' => $user?->role === 'Administrador',
+            'isAdmin'          => in_array($user?->role, ['Superadmin', 'Admin General', 'Administrador'], true),
+            'isSuperAdmin'     => $user?->isSuperAdmin() ?? false,
+            'canManageRoles'   => $user?->isSuperAdmin() ?? false,
+            'canManageEmpresa' => $user?->hasPermission('empresa.edit') ?? false,
+            'canManageUsers'   => $user?->hasPermission('usuarios.view') ?? false,
         ],
 
         // Datos de empresa para bloquear flujos si hace falta

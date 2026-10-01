@@ -1,0 +1,226 @@
+<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head>
+<meta charset="utf-8">
+<title>Especificación de Caso de Uso - Autenticación y Gestión de Usuario</title>
+<!--[if gte mso 9]>
+<xml>
+<w:WordDocument>
+<w:View>Print</w:View>
+<w:Zoom>100</w:Zoom>
+<w:DoNotOptimizeForBrowser/>
+</w:WordDocument>
+</xml>
+<![endif]-->
+<style>
+    body {
+        font-family: 'Segoe UI', Calibri, Arial, sans-serif;
+        font-size: 11pt;
+        color: #2D3748;
+        line-height: 1.5;
+        margin: 2cm;
+    }
+    h1 {
+        color: #1A365D;
+        font-size: 18pt;
+        border-bottom: 2px solid #2B6CB0;
+        padding-bottom: 6px;
+        margin-bottom: 15px;
+    }
+    h2 {
+        color: #2B6CB0;
+        font-size: 13pt;
+        margin-top: 20px;
+        margin-bottom: 8px;
+    }
+    .badge {
+        display: inline-block;
+        background-color: #EBF8FF;
+        color: #2B6CB0;
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 10pt;
+        border: 1px solid #BEE3F8;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        margin-bottom: 20px;
+    }
+    th, td {
+        border: 1px solid #CBD5E0;
+        padding: 8px 12px;
+        text-align: left;
+        vertical-align: top;
+        font-size: 10.5pt;
+    }
+    th {
+        background-color: #2B6CB0;
+        color: #FFFFFF;
+        font-weight: 600;
+    }
+    .header-col {
+        background-color: #EDF2F7;
+        font-weight: bold;
+        color: #2D3748;
+        width: 28%;
+    }
+    .section-header {
+        background-color: #E2E8F0;
+        font-weight: bold;
+        color: #1A202C;
+        text-transform: uppercase;
+        font-size: 9.5pt;
+        letter-spacing: 0.5px;
+    }
+    ol, ul {
+        margin: 4px 0 4px 20px;
+        padding: 0;
+    }
+    li {
+        margin-bottom: 4px;
+    }
+    .alt-flow {
+        background-color: #FFF5F5;
+        border-left: 3px solid #E53E3E;
+        padding: 6px 10px;
+        margin-top: 6px;
+        margin-bottom: 6px;
+        border-radius: 2px;
+    }
+</style>
+</head>
+<body>
+
+    <h1>Especificación Formal de Caso de Uso</h1>
+    <p><strong>Documento de Requisitos de Software</strong> | Sistema de Información</p>
+
+    <table>
+        <tr>
+            <th colspan="2">CU-01: INICIAR SESIÓN Y ACCESO AL SISTEMA</th>
+        </tr>
+        <tr>
+            <td class="header-col">Identificador</td>
+            <td><strong>CU-01</strong></td>
+        </tr>
+        <tr>
+            <td class="header-col">Nombre del Caso de Uso</td>
+            <td>Autenticación e Inicio de Sesión de Usuario</td>
+        </tr>
+        <tr>
+            <td class="header-col">Autor / Versión</td>
+            <td>Ingeniería de Software / v1.0</td>
+        </tr>
+        <tr>
+            <td class="header-col">Actor(es) Principal(es)</td>
+            <td><strong>Usuario Registrado</strong> (Cliente, Operador, Asesor o Administrador)</td>
+        </tr>
+        <tr>
+            <td class="header-col">Nivel / Tipo</td>
+            <td>Objetivo de Usuario / Esencial</td>
+        </tr>
+        <tr>
+            <td class="header-col">Descripción Breve</td>
+            <td>Permite a un usuario autenticarse en el sistema mediante su correo electrónico y contraseña para acceder a las funciones autorizadas según su rol.</td>
+        </tr>
+        <tr>
+            <td class="header-col">Precondiciones</td>
+            <td>
+                <ul>
+                    <li>El usuario debe estar previamente registrado en el sistema.</li>
+                    <li>La cuenta de usuario debe tener estado <em>"Activo"</em>.</li>
+                    <li>Disponer de conexión a internet o acceso a la red de la aplicación.</li>
+                </ul>
+            </td>
+        </tr>
+        <tr>
+            <td class="header-col">Postcondiciones de Éxito</td>
+            <td>
+                <ul>
+                    <li>Se genera un token de sesión seguro (JWT / Cookie).</li>
+                    <li>El sistema registra la fecha, hora e IP del último acceso.</li>
+                    <li>El usuario es redirigido al panel principal (Dashboard) correspondiente a su rol.</li>
+                </ul>
+            </td>
+        </tr>
+        <tr>
+            <td class="header-col">Postcondiciones de Fallo</td>
+            <td>
+                <ul>
+                    <li>No se otorga acceso a ningún módulo privado.</li>
+                    <li>El sistema incrementa el contador de intentos fallidos.</li>
+                </ul>
+            </td>
+        </tr>
+
+        <!-- FLUJO PRINCIPAL -->
+        <tr>
+            <td colspan="2" class="section-header">Flujo Principal (Camino Feliz)</td>
+        </tr>
+        <tr>
+            <td colspan="2">
+                <ol>
+                    <li>El usuario ingresa a la URL de inicio de sesión de la aplicación.</li>
+                    <li>El sistema despliega el formulario con los campos <em>Correo electrónico</em> y <em>Contraseña</em>, junto con la opción <em>"Recordarme"</em> y el botón <em>"Ingresar"</em>.</li>
+                    <li>El usuario ingresa sus credenciales válidas y presiona el botón <strong>"Ingresar"</strong>.</li>
+                    <li>El sistema valida el formato de los datos y comprueba la correspondencia con la base de datos de usuarios.</li>
+                    <li>El sistema verifica que la cuenta no esté bloqueada ni suspendida.</li>
+                    <li>El sistema inicia la sesión de usuario, carga los permisos correspondientes y redirige al panel principal (<em>Dashboard</em>).</li>
+                </ol>
+            </td>
+        </tr>
+
+        <!-- FLUJOS ALTERNATIVOS -->
+        <tr>
+            <td colspan="2" class="section-header">Flujos Alternativos y Excepciones</td>
+        </tr>
+        <tr>
+            <td colspan="2">
+                <div class="alt-flow">
+                    <strong>3a. Campos Vacíos o Formato Inválido:</strong><br>
+                    1. El sistema resalta los campos faltantes en color rojo y muestra el mensaje: <em>"Por favor ingrese un correo válido y su contraseña."</em><br>
+                    2. El caso de uso retorna al paso 2.
+                </div>
+
+                <div class="alt-flow">
+                    <strong>4a. Credenciales Incorrectas (Contraseña o Correo no coincide):</strong><br>
+                    1. El sistema muestra la advertencia: <em>"Correo o contraseña incorrectos."</em><br>
+                    2. El sistema incrementa el contador de intentos fallidos.<br>
+                    3. El caso de uso retorna al paso 2.
+                </div>
+
+                <div class="alt-flow">
+                    <strong>5a. Bloqueo por Múltiples Intentos Fallidos (3 o más intentos):</strong><br>
+                    1. El sistema bloquea temporalmente la cuenta durante 15 minutos.<br>
+                    2. El sistema muestra el mensaje: <em>"Demasiados intentos fallidos. Su cuenta ha sido bloqueada temporalmente por seguridad."</em><br>
+                    3. El sistema envía un correo de notificación de seguridad al usuario.<br>
+                    4. El caso de uso finaliza sin acceso.
+                </div>
+
+                <div class="alt-flow">
+                    <strong>2b. Usuario Olvidó su Contraseña:</strong><br>
+                    1. El usuario hace clic en el enlace <em>"¿Olvidó su contraseña?"</em>.<br>
+                    2. El sistema redirige al caso de uso alterno <em>CU-02: Recuperación de Contraseña</em>.
+                </div>
+            </td>
+        </tr>
+
+        <!-- REGLAS DE NEGOCIO Y REQUISITOS NO FUNCIONALES -->
+        <tr>
+            <td colspan="2" class="section-header">Reglas de Negocio / Notas Especiales</td>
+        </tr>
+        <tr>
+            <td class="header-col">Seguridad y Políticas</td>
+            <td>
+                <ul>
+                    <li>Las contraseñas se transmiten bajo cifrado SSL/TLS (HTTPS) y se almacenan hasheadas (bcrypt/Argon2).</li>
+                    <li>Tiempo de inactividad de sesión: Cierre automático tras 30 minutos de inactividad.</li>
+                    <li>Registro de auditoría obligatorio (Log de inicios de sesión exitosos y fallidos).</li>
+                </ul>
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>

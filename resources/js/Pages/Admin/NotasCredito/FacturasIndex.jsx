@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { Head, Link, useForm, router } from "@inertiajs/react";
 import AdminLayout from "@/Layouts/AdminLayout";
+import useCan from "@/Hooks/useCan";
 
 const money = (n) =>
   new Intl.NumberFormat("es-EC", {
@@ -312,6 +313,10 @@ function FiltersNotas({ filtros }) {
 }
 
 export default function FacturasIndex({ auth, ventas, notas, filtros, filtros_nc, flash }) {
+  const can = useCan();
+  const canCreate = can('notas_credito.create');
+  const canSri = can('notas_credito.sri');
+
   const listaFact = Array.isArray(ventas?.data) ? ventas.data : [];
   const listaNotas = Array.isArray(notas?.data) ? notas.data : [];
 
@@ -400,6 +405,9 @@ export default function FacturasIndex({ auth, ventas, notas, filtros, filtros_nc
                           <td className="px-3 py-2">
                             <div className="font-medium">{v.cliente_nombres ?? "—"}</div>
                             <div className="text-xs text-gray-500">{v.cliente_ci_o_ruc ?? ""}</div>
+                            <div className="text-[11px] text-indigo-700 font-medium mt-0.5">
+                              Facturado por: {v.creador_nombre ? `[ID: ${v.creada_por}] ${v.creador_nombre}` : (v.creada_por ? `[ID: ${v.creada_por}]` : "—")}
+                            </div>
                           </td>
                           <td className="px-3 py-2 text-right">{money(v.subtotal)}</td>
                           <td className="px-3 py-2 text-right">{money(v.impuesto_15)}</td>
@@ -426,10 +434,10 @@ export default function FacturasIndex({ auth, ventas, notas, filtros, filtros_nc
                                   href={route("admin.notas_credito.show", v.nc_id)}
                                   className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
                                 >
-                                  ✏️ Continuar NC
+                                  {canCreate ? "✏️ Continuar NC" : "👁️ Ver NC"}
                                 </Link>
                               </div>
-                            ) : (
+                            ) : canCreate ? (
                               <div className="inline-flex gap-2">
                                 <button
                                   onClick={() => prellenar(v.id, false)}
@@ -438,14 +446,18 @@ export default function FacturasIndex({ auth, ventas, notas, filtros, filtros_nc
                                 >
                                   {loadingVentaId === v.id ? "Abriendo…" : "✏️ Seleccionar Productos"}
                                 </button>
-                                <button
-                                  onClick={() => prellenar(v.id, true)}
-                                  disabled={loadingVentaId === v.id}
-                                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-                                >
-                                  {loadingVentaId === v.id ? "Procesando…" : "🚀 Generar y Emitir"}
-                                </button>
+                                {canSri && (
+                                  <button
+                                    onClick={() => prellenar(v.id, true)}
+                                    disabled={loadingVentaId === v.id}
+                                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                                  >
+                                    {loadingVentaId === v.id ? "Procesando…" : "🚀 Generar y Emitir"}
+                                  </button>
+                                )}
                               </div>
+                            ) : (
+                              <span className="text-xs text-slate-400">—</span>
                             )}
                           </td>
                         </tr>
@@ -499,6 +511,9 @@ export default function FacturasIndex({ auth, ventas, notas, filtros, filtros_nc
                         <td className="px-3 py-2">
                           <div className="font-medium">{n.cliente_nombres ?? "—"}</div>
                           <div className="text-xs text-gray-500">{n.cliente_ci_o_ruc ?? ""}</div>
+                          <div className="text-[11px] text-purple-700 font-medium mt-0.5">
+                            Generado por: {n.creador_nombre ? `[ID: ${n.creada_por}] ${n.creador_nombre}` : (n.creada_por ? `[ID: ${n.creada_por}]` : "—")}
+                          </div>
                         </td>
                         <td className="px-3 py-2 font-mono text-xs">{n.doc_sustento || "—"}</td>
                         <td className="px-3 py-2 text-right">{money(n.subtotal)}</td>

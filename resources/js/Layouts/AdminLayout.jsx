@@ -2,58 +2,66 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Link, usePage, Head } from '@inertiajs/react';
 import {
   FiMenu, FiX, FiUsers, FiBox, FiTrendingUp, FiFileText, FiBarChart2,
-  FiChevronDown, FiLogOut, FiSettings, FiAlertTriangle
+  FiChevronDown, FiLogOut, FiSettings, FiAlertTriangle, FiTag, FiShield
 } from 'react-icons/fi';
 import FlashToaster from '@/Components/FlashToaster';
 import BaseModal from '@/Components/BaseModal';
+import ApplicationLogo from '@/Components/ApplicationLogo';
 
 /* --------- Definiciones de navegación --------- */
 const LINK_DEFS = {
-  dashboard: { key: 'dashboard', name: 'Dashboard', icon: FiBox },
-  usuarios:  { key: 'usuarios',  name: 'Usuarios',  icon: FiUsers },
-  compras:   { key: 'compras',   name: 'Compras',   icon: FiTrendingUp },
-  etiquetas: { key: 'etiquetas', name: 'Etiquetas', icon: FiFileText },
-  ventas:    { key: 'ventas',    name: 'Ventas',    icon: FiTrendingUp },
-  notas:     { key: 'notas',     name: 'Notas de crédito', icon: FiFileText },
-  reportes:  { key: 'reportes',  name: 'Reporte Ventas',  icon: FiBarChart2 },
-  rproductos: { key: 'productos', name: 'Reporte Productos', icon: FiBox },
-  productos: { key: 'productos', name: 'Productos', icon: FiBox },
-
-  // productos: { key: 'productos', name: 'Productos', icon: FiBox },
-  // notas:     { key: 'notas',     name: 'Notas de crédito', icon: FiFileText },
-  // reportes:  { key: 'reportes',  name: 'Reportes',  icon: FiBarChart2 },
+  dashboard:    { key: 'dashboard',    name: 'Dashboard',         icon: FiBox },
+  rolesPermisos:{ key: 'rolesPermisos',name: 'Roles y Permisos',  icon: FiShield, badge: 'Superadmin' },
+  usuarios:     { key: 'usuarios',     name: 'Usuarios',          icon: FiUsers },
+  compras:      { key: 'compras',      name: 'Compras',           icon: FiTrendingUp },
+  etiquetas:    { key: 'etiquetas',    name: 'Etiquetas',         icon: FiFileText },
+  cambioCodigo: { key: 'cambioCodigo', name: 'Cambiar Códigos',   icon: FiTag },
+  ventas:       { key: 'ventas',       name: 'Ventas',            icon: FiTrendingUp },
+  notas:        { key: 'notas',        name: 'Notas de crédito',  icon: FiFileText },
+  reportes:     { key: 'reportes',     name: 'Reporte Ventas',    icon: FiBarChart2 },
+  rproductos:   { key: 'rproductos',   name: 'Reporte Productos', icon: FiBox },
+  productos:    { key: 'productos',    name: 'Productos',         icon: FiBox },
 };
 
 const ADMIN_ROUTE_MAP = {
-  dashboard: 'admin.dashboard.index',
-  usuarios:  'admin.usuarios.index',
-  compras:   'admin.compras.index',
-  etiquetas: 'admin.etiquetas.index',
-  ventas:    'admin.ventas.index',
-  notas:     'admin.notas_credito.facturas',
-  reportes:  'admin.reportes.index',
-  rproductos: 'admin.reportes.productos.index',
-
+  dashboard:    'admin.dashboard.index',
+  rolesPermisos:'admin.roles_permisos.index',
+  usuarios:     'admin.usuarios.index',
+  compras:      'admin.compras.index',
+  etiquetas:    'admin.etiquetas.index',
+  cambioCodigo: 'admin.productos.cambiar_codigo.index',
+  ventas:       'admin.ventas.index',
+  notas:        'admin.notas_credito.facturas',
+  reportes:     'admin.reportes.index',
+  rproductos:   'admin.reportes.productos.index',
 };
 
 const VENTAS_ROUTE_MAP = {
   dashboard: 'ventas.dashboard.index',
-  ventas:   'ventas.ventas.index',
+  ventas:    'ventas.ventas.index',
   productos: 'ventas.productos.index',
-  reportes: 'ventas.reportes.index',
-};
-
-const PERMISSIONS = {
-  Administrador: Object.keys(ADMIN_ROUTE_MAP),
-  Ventas:        Object.keys(VENTAS_ROUTE_MAP),
+  reportes:  'ventas.reportes.index',
 };
 
 /* --------- Helpers --------- */
+const FALLBACK_PATHS = {
+  'admin.dashboard.index': '/admin/dashboard',
+  'admin.roles_permisos.index': '/admin/roles-permisos',
+  'admin.usuarios.index': '/admin/usuarios',
+  'admin.compras.index': '/admin/compras',
+  'admin.etiquetas.index': '/admin/etiquetas',
+  'admin.productos.cambiar_codigo.index': '/admin/productos/cambiar-codigo',
+  'admin.ventas.index': '/admin/ventas',
+  'admin.notas_credito.facturas': '/admin/notas-credito/facturas',
+  'admin.reportes.index': '/admin/reportes',
+  'admin.reportes.productos.index': '/admin/reportes/productos',
+};
+
 const safeHref = (routeName, params = {}, fallback = '#') => {
   try {
     if (typeof route === 'function') return route(routeName, params);
   } catch (_) {}
-  return fallback;
+  return FALLBACK_PATHS[routeName] ?? fallback;
 };
 
 function useIsActive() {
@@ -71,25 +79,81 @@ function useIsActive() {
   };
 }
 
-function useLinksForRole(role) {
+function useLinksForRole() {
+  const { props } = usePage();
+  const auth = props?.auth || {};
+  const user = auth.user || {};
+  const role = user.role || '';
+  const isSuperAdmin = auth.isSuperAdmin || role === 'Superadmin';
+  const permissions = auth.permissions || user.permissions || [];
+
   return useMemo(() => {
-    const allowed = PERMISSIONS[role] ?? [];
-    const map = role === 'Ventas' ? VENTAS_ROUTE_MAP : ADMIN_ROUTE_MAP;
-    return allowed
+    // Si es Superadmin: acceso ilimitado a todas las opciones
+    if (isSuperAdmin) {
+      const allKeys = [
+        'dashboard',
+        'rolesPermisos',
+        'usuarios',
+        'compras',
+        'etiquetas',
+        'cambioCodigo',
+        'ventas',
+        'notas',
+        'reportes',
+        'rproductos',
+      ];
+      return allKeys
+        .map((k) => {
+          const def = LINK_DEFS[k];
+          const routeName = ADMIN_ROUTE_MAP[k];
+          if (!def || !routeName) return null;
+          return { ...def, routeName };
+        })
+        .filter(Boolean);
+    }
+
+    // Mapa de permisos para cada enlace
+    const REQUIREMENT_MAP = {
+      dashboard:    'dashboard.view',
+      usuarios:     'usuarios.view',
+      compras:      'compras.view',
+      etiquetas:    'etiquetas.view',
+      cambioCodigo: 'cambio_codigo.view',
+      ventas:       'ventas.view',
+      notas:        'notas_credito.view',
+      reportes:     'reportes_ventas.view',
+      rproductos:   'reportes_productos.view',
+      productos:    'productos.view',
+    };
+
+    const routeMap = role === 'Ventas' ? VENTAS_ROUTE_MAP : ADMIN_ROUTE_MAP;
+
+    return Object.keys(LINK_DEFS)
+      .filter((k) => {
+        if (k === 'rolesPermisos') return false; // Solo Superadmin
+        const req = REQUIREMENT_MAP[k];
+        if (!req) return false;
+        return permissions.includes(req);
+      })
       .map((k) => {
         const def = LINK_DEFS[k];
-        const routeName = map[k];
+        const routeName = routeMap[k] || ADMIN_ROUTE_MAP[k] || VENTAS_ROUTE_MAP[k];
         if (!def || !routeName) return null;
         return { ...def, routeName };
       })
       .filter(Boolean);
-  }, [role]);
+  }, [role, isSuperAdmin, permissions]);
 }
 
 /* --------- User Menu (dropdown) --------- */
 function UserMenu({ user, role }) {
+  const { props } = usePage();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+
+  const isSuperAdmin = props?.auth?.isSuperAdmin || role === 'Superadmin';
+  const canManageEmpresa = props?.ability?.canManageEmpresa || isSuperAdmin;
+  const canManageRoles = props?.ability?.canManageRoles || isSuperAdmin;
 
   // Cerrar al hacer click fuera
   useEffect(() => {
@@ -107,19 +171,22 @@ function UserMenu({ user, role }) {
   }, []);
 
   // Rutas del menú
-  const empresaHref = safeHref('admin.empresa.index', {}, '/admin/empresa');
-  const logoutHref  = safeHref('logout', {}, '/logout');
+  const empresaHref       = safeHref('admin.empresa.index', {}, '/admin/empresa');
+  const rolesPermisosHref = safeHref('admin.roles_permisos.index', {}, '/admin/roles-permisos');
+  const logoutHref        = safeHref('logout', {}, '/logout');
 
   return (
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen((s) => !s)}
-        className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-sm hover:bg-slate-50"
+        className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-sm hover:bg-slate-50 transition"
         aria-haspopup="menu"
         aria-expanded={open ? 'true' : 'false'}
       >
         <div className="w-7 h-7 rounded-full ring-1 ring-slate-200 bg-white flex items-center justify-center">
-          <span className="w-6 h-6 rounded-full bg-secondary-500 text-white text-xs font-semibold grid place-items-center">
+          <span className={`w-6 h-6 rounded-full text-white text-xs font-semibold grid place-items-center ${
+            isSuperAdmin ? 'bg-purple-600' : 'bg-secondary-500'
+          }`}>
             {(user?.name?.[0] || 'U').toUpperCase()}
           </span>
         </div>
@@ -129,55 +196,63 @@ function UserMenu({ user, role }) {
       {/* Dropdown */}
       <div
         className={[
-          'absolute right-0 mt-2 w-48 rounded-lg border border-slate-200 bg-white shadow-lg z-50',
+          'absolute right-0 mt-2 w-52 rounded-lg border border-slate-200 bg-white shadow-lg z-50',
           open ? 'opacity-100 translate-y-0' : 'pointer-events-none opacity-0 -translate-y-1',
           'transition-all',
         ].join(' ')}
         role="menu"
       >
-        <div className="px-3 pt-2 pb-1">
-          <div className="text-sm font-medium text-slate-900 truncate">{user?.name ?? 'Usuario'}</div>
-          <div className="text-xs text-slate-500">{role || '—'}</div>
+        <div className="px-3 pt-2 pb-1.5">
+          <div className="text-sm font-semibold text-slate-900 truncate">{user?.name ?? 'Usuario'}</div>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+              isSuperAdmin
+                ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                : 'bg-slate-100 text-slate-700'
+            }`}>
+              {role || '—'}
+            </span>
+          </div>
         </div>
         <div className="my-1 h-px bg-slate-100" />
 
-        {/* Para Administrador: Empresa + Logout */}
-        {role === 'Administrador' && (
-          <>
-            <Link
-              href={empresaHref}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-              role="menuitem"
-            >
-              <FiSettings className="w-4 h-4 text-slate-500" />
-              Empresa
-            </Link>
-            <Link
-              href={logoutHref}
-              method="post"
-              as="button"
-              className="w-full text-left flex items-center gap-2 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50"
-              role="menuitem"
-            >
-              <FiLogOut className="w-4 h-4" />
-              Cerrar sesión
-            </Link>
-          </>
-        )}
-
-        {/* Para Ventas: sólo Logout */}
-        {role === 'Ventas' && (
+        {/* Solo Superadmin: Gestión de Roles y Permisos */}
+        {canManageRoles && (
           <Link
-            href={logoutHref}
-            method="post"
-            as="button"
-            className="w-full text-left flex items-center gap-2 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50"
+            href={rolesPermisosHref}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-purple-800 hover:bg-purple-50 font-medium"
             role="menuitem"
           >
-            <FiLogOut className="w-4 h-4" />
-            Cerrar sesión
+            <FiShield className="w-4 h-4 text-purple-600" />
+            Roles y Permisos
           </Link>
         )}
+
+        {/* Si tiene permiso para ver/gestionar empresa */}
+        {canManageEmpresa && (
+          <Link
+            href={empresaHref}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+            role="menuitem"
+          >
+            <FiSettings className="w-4 h-4 text-slate-500" />
+            Empresa y Firma SRI
+          </Link>
+        )}
+
+        <div className="my-1 h-px bg-slate-100" />
+
+        {/* Cerrar Sesión */}
+        <Link
+          href={logoutHref}
+          method="post"
+          as="button"
+          className="w-full text-left flex items-center gap-2 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50 font-medium"
+          role="menuitem"
+        >
+          <FiLogOut className="w-4 h-4" />
+          Cerrar sesión
+        </Link>
       </div>
     </div>
   );
@@ -195,11 +270,14 @@ function LeftSidebarDesktop({ role = '' }) {
         bg-white border-r border-slate-200 overflow-y-auto
       "
     >
-      <div className="px-4 pt-4 pb-2">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-primary-600" />
-          <div className="text-sm font-semibold text-slate-900">Menú</div>
-        </div>
+      <div className="px-4 pt-4 pb-3 border-b border-slate-100">
+        <Link href="/" className="flex items-center gap-2.5 group">
+          <ApplicationLogo className="h-7 w-auto max-h-7 object-contain transition-transform group-hover:scale-105" containerClassName="p-1 bg-white rounded-lg border border-slate-200/80 shadow-sm" />
+          <div className="leading-tight">
+            <div className="text-xs font-black text-slate-900 tracking-tight">MUNDO NAVIDEÑO</div>
+            <div className="text-[10px] font-bold text-amber-600">SISTEMA 365</div>
+          </div>
+        </Link>
       </div>
 
       <nav className="px-2 pb-3">
@@ -239,6 +317,11 @@ function LeftSidebarDesktop({ role = '' }) {
                     <Icon className= {active ? 'font-semibold text-primary-500 w-4 h-4' : 'font-medium'} />
                   </span>
                   <span className={active ? 'font-semibold' : 'font-medium'}>{name}</span>
+                  {key === 'rolesPermisos' && (
+                    <span className="ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                      Super
+                    </span>
+                  )}
                 </Link>
               </li>
             );
@@ -271,7 +354,10 @@ function LeftSidebarDrawer({ role = '', open, onClose }) {
         ].join(' ')}
       >
         <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
-          <h2 className="font-semibold text-slate-900">Menú</h2>
+          <Link href="/" className="flex items-center gap-2">
+            <ApplicationLogo className="h-7 w-auto max-h-7 object-contain" containerClassName="p-1 bg-white rounded-lg border border-slate-200/80 shadow-sm" />
+            <span className="font-bold text-slate-900 text-sm">Mundo Navideño 365</span>
+          </Link>
           <button
             onClick={onClose}
             className="p-2 rounded-md hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
@@ -319,6 +405,11 @@ function LeftSidebarDrawer({ role = '', open, onClose }) {
                       <Icon className="w-4 h-4" />
                     </span>
                     <span className={active ? 'font-semibold' : 'font-medium'}>{name}</span>
+                    {key === 'rolesPermisos' && (
+                      <span className="ml-auto text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                        Super
+                      </span>
+                    )}
                   </Link>
                 </li>
               );
@@ -335,7 +426,7 @@ export default function AdminLayout({ children, title = 'Panel Administrativo' }
   const { props } = usePage();
   const user = props?.auth?.user || {};
   const role = user?.role || '';
-  const allowedRoles = ['Administrador', 'Ventas'];
+  const allowedRoles = ['Superadmin', 'Admin General', 'Administrador', 'Ventas'];
   const isAllowed = allowedRoles.includes(role);
 
   const [openLeft, setOpenLeft] = useState(false);
@@ -363,6 +454,10 @@ export default function AdminLayout({ children, title = 'Panel Administrativo' }
             >
               <FiMenu className="w-5 h-5" />
             </button>
+            <Link href="/" className="flex items-center gap-2">
+              <ApplicationLogo className="h-7 w-auto max-h-7 object-contain" containerClassName="p-1 bg-white rounded-lg border border-slate-200/80 shadow-sm" />
+            </Link>
+            <span className="text-slate-300 hidden sm:inline">|</span>
             <h1 className="text-[15px] sm:text-base font-semibold text-slate-900">{title}</h1>
           </div>
 

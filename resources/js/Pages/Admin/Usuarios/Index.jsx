@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Head, Link, router } from '@inertiajs/react';
+import { Head, Link, router, usePage } from '@inertiajs/react';
 import AdminLayout from '@/Layouts/AdminLayout';
 import { FiSearch, FiPlus, FiEdit2, FiRefreshCw } from 'react-icons/fi';
 import BaseModal from '@/Components/BaseModal';
@@ -53,7 +53,21 @@ function Pagination({ page }) {
   );
 }
 
+const ROLE_BADGES = {
+  'Superadmin': 'bg-purple-50 text-purple-700 border-purple-200 font-bold',
+  'Admin General': 'bg-indigo-50 text-indigo-700 border-indigo-200 font-semibold',
+  'Administrador': 'bg-emerald-50 text-emerald-700 border-emerald-200 font-medium',
+  'Ventas': 'bg-amber-50 text-amber-700 border-amber-200 font-medium',
+};
+
 export default function Index({ users, filters, roles }) {
+  const { props } = usePage();
+  const auth = props?.auth || {};
+  const isSuperAdmin = auth.isSuperAdmin || auth.user?.role === 'Superadmin';
+  const permissions = auth.permissions || auth.user?.permissions || [];
+  const canCreate = isSuperAdmin || permissions.includes('usuarios.create');
+  const canEdit   = isSuperAdmin || permissions.includes('usuarios.edit');
+
   const dataList = getData(users);
 
   // Filtros con debounce
@@ -102,12 +116,14 @@ export default function Index({ users, filters, roles }) {
 
       {/* Botón dentro del componente (no en el layout) */}
       <div className="mb-3 flex items-center justify-end">
-        <button
-          onClick={openCreate}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-white bg-primary-600 hover:bg-primary-700"
-        >
-          <FiPlus className="w-4 h-4" /> Nuevo
-        </button>
+        {canCreate && (
+          <button
+            onClick={openCreate}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-white bg-primary-600 hover:bg-primary-700 shadow-sm transition"
+          >
+            <FiPlus className="w-4 h-4" /> Nuevo Usuario
+          </button>
+        )}
       </div>
 
       {/* Filtros */}
@@ -192,13 +208,13 @@ export default function Index({ users, filters, roles }) {
                 <th>Correo</th>
                 <th>Rol</th>
                 <th>Creado</th>
-                <th className="w-1">Acciones</th>
+                {canEdit && <th className="w-1">Acciones</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {dataList.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-slate-500">
+                  <td colSpan={canEdit ? 5 : 4} className="px-4 py-6 text-center text-slate-500">
                     No se encontraron usuarios con los filtros aplicados.
                   </td>
                 </tr>
@@ -209,20 +225,24 @@ export default function Index({ users, filters, roles }) {
                   <td className="px-4 py-3 font-medium text-slate-900">{u.name}</td>
                   <td className="px-4 py-3">{u.email}</td>
                   <td className="px-4 py-3">
-                    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs ${
+                      ROLE_BADGES[u.role] || 'bg-white border-slate-200 text-slate-700'
+                    }`}>
                       {u.role || '—'}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-slate-600">{fmtDate(u.created_at)}</td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => openEdit(u)}
-                      className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-white bg-primary-600 hover:bg-primary-700"
-                      title="Editar"
-                    >
-                      <FiEdit2 className="w-4 h-4" /> Editar
-                    </button>
-                  </td>
+                  {canEdit && (
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => openEdit(u)}
+                        className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-white bg-primary-600 hover:bg-primary-700 shadow-sm transition"
+                        title="Editar"
+                      >
+                        <FiEdit2 className="w-4 h-4" /> Editar
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

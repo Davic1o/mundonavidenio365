@@ -4,6 +4,7 @@ import AdminLayout from '@/Layouts/AdminLayout';
 import { FiSearch, FiPlus, FiEdit2, FiTrash2, FiRefreshCw } from 'react-icons/fi';
 import BaseModal from '@/Components/BaseModal';
 import LoteForm from './components/LoteForm';
+import useCan from '@/Hooks/useCan';
 
 /* Helpers paginator */
 const getData = (p) => Array.isArray(p) ? p : (p?.data ?? []);
@@ -77,40 +78,14 @@ function Pagination({ page }) {
 }
 
 export default function Index({ lotes, filtros, productos = [], proveedores = [] }) {
+  const can = useCan();
+  const canCreate = can('compras.create');
+  const canEdit   = can('compras.edit');
+  const canDelete = can('compras.delete');
+
+  const hasActions = canEdit || canDelete;
+
   const dataList = getData(lotes);
-
-  // Última compra (para sugerir solo código y nombre)
-  const latestRow = useMemo(() => {
-    if (!dataList?.length) return null;
-    const sorted = [...dataList].sort((a, b) => {
-      const da = a?.fecha_compra ? new Date(a.fecha_compra).getTime() : 0;
-      const db = b?.fecha_compra ? new Date(b.fecha_compra).getTime() : 0;
-      if (db !== da) return db - da;
-      return (b?.id ?? 0) - (a?.id ?? 0);
-    });
-    return sorted[0] ?? null;
-  }, [dataList]);
-
-  // Solo enviar producto: { codigo, nombre } cuando es "Nueva compra"
-  function buildInitialFromLast() {
-    const codigo = latestRow?.producto?.codigo ?? null;
-    const nombre = latestRow?.producto?.nombre ?? null;
-
-    if (!codigo && !nombre) {
-      // No hay historial; aún así mandamos estructura vacía por consistencia
-      return {
-        producto: { codigo: '', nombre: '' }
-      };
-    }
-
-    return {
-      // OJO: aquí solo va el producto (código y nombre). Nada más.
-      producto: {
-        codigo: String(codigo ?? ''),
-        nombre: String(nombre ?? ''),
-      },
-    };
-  }
 
   // filtros del controlador: q, codigo, proveedor
   const [q, setQ] = useState({
@@ -137,19 +112,17 @@ export default function Index({ lotes, filtros, productos = [], proveedores = []
 
   // modal
   const [openModal, setOpenModal] = useState(false);
-  const [initial, setInitial] = useState(null); // create/edit
+  const [initial, setInitial] = useState(null); // create: null / edit: row
 
   const isEdit = !!initial?.id;
 
   function openCreate() {
-    // Solo para compra nueva: pasar SOLO código y nombre del último producto
-    const preset = buildInitialFromLast();
-    setInitial(preset);
+    setInitial(null); // Formulario completamente limpio sin productos preseleccionados
     setOpenModal(true);
   }
 
   function openEdit(row) {
-    setInitial(row); // Para editar, seguimos enviando el row completo
+    setInitial(row);
     setOpenModal(true);
   }
 
@@ -166,12 +139,14 @@ export default function Index({ lotes, filtros, productos = [], proveedores = []
 
       {/* Botón crear */}
       <div className="mb-3 flex items-center justify-end">
-        <button
-          onClick={openCreate}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-white bg-primary-600 hover:bg-primary-700"
-        >
-          <FiPlus className="w-4 h-4" /> Nueva compra
-        </button>
+        {canCreate && (
+          <button
+            onClick={openCreate}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-white bg-primary-600 hover:bg-primary-700 shadow-sm transition"
+          >
+            <FiPlus className="w-4 h-4" /> Nueva compra
+          </button>
+        )}
       </div>
 
       {/* Filtros */}
@@ -237,22 +212,22 @@ export default function Index({ lotes, filtros, productos = [], proveedores = []
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-600">
               <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-left">
-                <th className="whitespace-nowrap">ID</th>
                 <th>Producto</th>
                 <th>Código</th>
                 <th>Proveedor</th>
+                <th>Usuario</th>
                 <th>Fecha</th>
                 <th>Cantidad</th>
                 <th>Disponible</th>
                 <th>Precio unit. final</th>
                 <th>Precio total</th>
-                <th className="w-1">Acciones</th>
+                {hasActions && <th className="w-1">Acciones</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {dataList.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-6 text-center text-slate-500">
+                  <td colSpan={hasActions ? 10 : 9} className="px-4 py-6 text-center text-slate-500">
                     No hay compras que coincidan con los filtros.
                   </td>
                 </tr>
@@ -260,7 +235,6 @@ export default function Index({ lotes, filtros, productos = [], proveedores = []
 
               {dataList.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3">{row.id}</td>
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-900">{row.producto?.nombre}</div>
                   </td>
@@ -270,29 +244,45 @@ export default function Index({ lotes, filtros, productos = [], proveedores = []
                   <td className="px-4 py-3">
                     {row.proveedor?.nombre} {row.proveedor?.ci_o_ruc ? `— [${row.proveedor.ci_o_ruc}]` : ''}
                   </td>
+                  <td className="px-4 py-3 text-xs">
+                    <div className="font-semibold text-slate-800">
+                      {row.registrado_por ? `[ID: ${row.registrado_por.id}] ${row.registrado_por.name}` : (row.registrado_por_id ? `[ID: ${row.registrado_por_id}]` : '—')}
+                    </div>
+                    {row.actualizado_por && row.actualizado_por.id !== row.registrado_por?.id && (
+                      <div className="text-[10px] text-amber-700 mt-0.5">
+                        Edit: [ID: {row.actualizado_por.id}] {row.actualizado_por.name}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3">{fmtDate(row.fecha_compra)}</td>
                   <td className="px-4 py-3">{row.cantidad_compra}</td>
                   <td className="px-4 py-3">{row.producto?.cantidad_total}</td>
                   <td className="px-4 py-3">{money(row.precio_compra_final)}</td>
                   <td className="px-4 py-3">{money(row.precio_total)}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => openEdit(row)}
-                        className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-white bg-primary-600 hover:bg-primary-700"
-                        title="Editar"
-                      >
-                        <FiEdit2 className="w-4 h-4" /> Editar
-                      </button>
-                      <button
-                        onClick={() => doDelete(row)}
-                        className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700"
-                        title="Eliminar"
-                      >
-                        <FiTrash2 className="w-4 h-4" /> Eliminar
-                      </button>
-                    </div>
-                  </td>
+                  {hasActions && (
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        {canEdit && (
+                          <button
+                            onClick={() => openEdit(row)}
+                            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-white bg-primary-600 hover:bg-primary-700 shadow-sm transition"
+                            title="Editar"
+                          >
+                            <FiEdit2 className="w-4 h-4" /> Editar
+                          </button>
+                        )}
+                        {canDelete && (
+                          <button
+                            onClick={() => doDelete(row)}
+                            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 shadow-sm transition"
+                            title="Eliminar"
+                          >
+                            <FiTrash2 className="w-4 h-4" /> Eliminar
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -312,9 +302,10 @@ export default function Index({ lotes, filtros, productos = [], proveedores = []
         maxWidth="4xl"
       >
         <LoteForm
+          key={initial?.id ? `edit-${initial.id}` : 'create'}
           productos={productos}
           proveedores={proveedores}
-          initial={initial}   // Crear: { producto: { codigo, nombre } } | Editar: row completo
+          initial={initial}
           onSuccess={() => setOpenModal(false)}
           onCancel={() => setOpenModal(false)}
         />

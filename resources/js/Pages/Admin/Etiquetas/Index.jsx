@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
 import AdminLayout from '@/Layouts/AdminLayout';
+import useCan from '@/Hooks/useCan';
 import { FiSearch, FiPrinter, FiRefreshCw, FiSliders, FiSave } from 'react-icons/fi';
 import BaseModal from '@/Components/BaseModal';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
@@ -148,9 +149,12 @@ function ModalImpresion({
   onClose,
   lotes = [],
   preselect = null,
-  tienda = 'Sistema de Facturación',
+  tienda = 'Mundo navideño 365',
   presetsTable = [],
 }) {
+  const can = useCan();
+  const canPresets = can('etiquetas.presets');
+
   // Elecciones del usuario
   const [labelKind, setLabelKind] = useState('grandes'); // grandes | pequenas
   const [paper, setPaper] = useState('letter'); // letter | a4
@@ -557,15 +561,17 @@ function ModalImpresion({
             <div className="flex items-center gap-2 text-slate-700 font-medium">
               <FiSliders/> Tipo & Papel
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={savePresetToDB}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-white bg-primary-600 hover:bg-primary-700 text-sm"
-                title="Guardar cambios en BD"
-              >
-                <FiSave className="w-4 h-4" /> Guardar cambios
-              </button>
-            </div>
+            {canPresets && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={savePresetToDB}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-white bg-primary-600 hover:bg-primary-700 text-sm"
+                  title="Guardar cambios en BD"
+                >
+                  <FiSave className="w-4 h-4" /> Guardar cambios
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1123,7 +1129,7 @@ export default function Index({ lotes, filtros, presetsTable }) {
         onClose={() => setOpenModal(false)}
         lotes={getData(lotes)}
         preselect={selectedLote}
-        tienda="Sistema de Facturación"
+        tienda="Mundo navideño 365"
         presetsTable={presetsTable}
       />
     </AdminLayout>

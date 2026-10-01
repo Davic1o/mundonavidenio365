@@ -222,10 +222,13 @@ class NotasCreditoController extends Controller
         $ventas = DB::table('ventas')
             ->leftJoin('clientes','clientes.id','=','ventas.cliente_id')
             ->leftJoin('notas_credito as nc_ref','nc_ref.venta_id','=','ventas.id')
+            ->leftJoin('users as u_creador', 'u_creador.id', '=', 'ventas.creada_por')
             ->select(
                 'ventas.id','ventas.fecha','ventas.estado',
                 'ventas.estab','ventas.pto_emision','ventas.secuencial',
                 'ventas.subtotal','ventas.impuesto_15','ventas.impuesto_0','ventas.descuento','ventas.total',
+                'ventas.creada_por',
+                'u_creador.name as creador_nombre',
                 'clientes.nombres as cliente_nombres','clientes.ci_o_ruc as cliente_ci_o_ruc',
                 'nc_ref.id as nc_id',
                 'nc_ref.estado as nc_estado'
@@ -253,11 +256,14 @@ class NotasCreditoController extends Controller
         $notas = DB::table('notas_credito')
             ->leftJoin('clientes','clientes.id','=','notas_credito.cliente_id')
             ->leftJoin('ventas as vdoc','vdoc.id','=','notas_credito.venta_id')
+            ->leftJoin('users as nc_user', 'nc_user.id', '=', 'notas_credito.creada_por')
             ->select(
                 'notas_credito.id','notas_credito.fecha','notas_credito.estado',
                 'notas_credito.estab','notas_credito.pto_emision','notas_credito.secuencial',
                 'notas_credito.subtotal','notas_credito.impuesto_15','notas_credito.impuesto_0','notas_credito.descuento','notas_credito.total',
                 'notas_credito.motivo',
+                'notas_credito.creada_por',
+                'nc_user.name as creador_nombre',
                 'clientes.nombres as cliente_nombres','clientes.ci_o_ruc as cliente_ci_o_ruc',
                 DB::raw("CONCAT(notas_credito.estab,'-',notas_credito.pto_emision,'-',LPAD(notas_credito.secuencial,9,'0')) as numero"),
                 DB::raw("CONCAT(vdoc.estab,'-',vdoc.pto_emision,'-',LPAD(vdoc.secuencial,9,'0')) as doc_sustento")
@@ -322,6 +328,7 @@ class NotasCreditoController extends Controller
 
             $cfg = $this->configEmisor($secuencial);
             $nc->autorizacion = $this->generarClaveAcceso(now(), $cfg, '04'); // Nota de crédito
+            $nc->creada_por   = auth()->id();
             $nc->save();
 
             return $nc;
@@ -504,12 +511,13 @@ class NotasCreditoController extends Controller
             }
 
             $tot = $this->calcularTotales($items);
-            $nc->subtotal    = $tot['subtotal'];
-            $nc->impuesto_15 = $tot['impuesto_15'];
-            $nc->impuesto_0  = $tot['impuesto_0'];
-            $nc->descuento   = $tot['descuento'];
-            $nc->total       = $tot['total'];
-            $nc->motivo      = $data['motivo'] ?? 'Devolución de mercadería';
+            $nc->subtotal        = $tot['subtotal'];
+            $nc->impuesto_15     = $tot['impuesto_15'];
+            $nc->impuesto_0      = $tot['impuesto_0'];
+            $nc->descuento       = $tot['descuento'];
+            $nc->total           = $tot['total'];
+            $nc->motivo          = $data['motivo'] ?? 'Devolución de mercadería';
+            $nc->actualizada_por = auth()->id();
             $nc->save();
         });
 

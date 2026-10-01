@@ -172,7 +172,7 @@ export default function Landing() {
                   {/* Header de la tarjeta principal */}
                   <div className="flex items-center justify-between pb-4 border-b border-slate-800">
                     <div className="flex items-center gap-3">
-                      <ApplicationLogo className="h-10 w-10" />
+                      <ApplicationLogo className="h-9 w-auto max-h-9 object-contain" containerClassName="p-1.5 bg-white rounded-xl shadow-md ring-1 ring-white/20" />
                       <div>
                         <h2 className="text-sm font-bold text-white">Mundo Navideño 365</h2>
                         <p className="text-[11px] font-semibold text-emerald-400">Portal Corporativo Activo</p>
@@ -378,7 +378,7 @@ export default function Landing() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col items-center justify-between gap-6 sm:flex-row">
             <div className="flex items-center gap-3">
-              <ApplicationLogo className="h-8 w-8" />
+              <ApplicationLogo className="h-8 w-auto max-h-8 object-contain" containerClassName="p-1.5 bg-white rounded-xl shadow-sm ring-1 ring-white/10" />
               <div>
                 <div className="text-sm font-bold text-white">MUNDO NAVIDEÑO 365</div>
                 <div className="text-xs text-slate-500">© {new Date().getFullYear()} — Todos los derechos reservados</div>

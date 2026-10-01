@@ -50,8 +50,8 @@ class ReportesProductosController extends Controller
         ]);
     }
 
-    /** ===================== EXPORT CSV (TODOS LOS FILTRADOS + SUBFILA VENDIDAS/STOCK) ===================== */
-    public function exportCsv(Request $request)
+    /** ===================== EXPORT EXCEL (.xls) ===================== */
+    public function exportExcel(Request $request)
     {
         $q         = trim($request->string('q')->toString());
         $codigo    = trim($request->string('codigo')->toString());
@@ -59,18 +59,15 @@ class ReportesProductosController extends Controller
 
         $base = $this->baseQuery($q, $codigo, $provQuery);
 
-        // Totales globales (del filtro)
         $agg = (clone $base)
             ->selectRaw('COALESCE(SUM(cantidad_compra),0) AS cantidad_total')
             ->selectRaw('COALESCE(SUM(cantidad_compra * precio_compra_final),0) AS compra_total')
             ->first();
 
-        // Traer todo para exportar y agrupar por producto
         $all = $base->get([
-            'id','producto_id','proveedor_id','fecha_compra','cantidad_compra','precio_compra_final'
+            'id','producto_id','proveedor_id','fecha_compra','cantidad_compra','precio_compra','costo_general','costo_transporte','porcentaje_ganancia','precio_compra_final'
         ]);
 
-        // Group by producto
         $groups = [];
         foreach ($all as $l) {
             $pid = (int) $l->producto_id;
@@ -83,72 +80,107 @@ class ReportesProductosController extends Controller
             }
             $groups[$pid]['rows'][] = $this->rowFromLote($l);
             $groups[$pid]['sumCant'] += (float) ($l->cantidad_compra ?? 0);
-            // si viniera null en la primera, intenta tomarlo de otras filas
             if ($groups[$pid]['stock'] === null && $l->producto) {
                 $groups[$pid]['stock'] = (float)$l->producto->cantidad_total;
             }
         }
 
-        $filename = 'reporte_productos_'.now()->format('Ymd_His').'.csv';
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=UTF-8',
-            'Content-Disposition' => "attachment; filename=\"$filename\"",
-        ];
-        $columns = [
-            'Número','Código','Nombre','Proveedor','Fecha de compra','Cantidad',
-            'Precio final (unit.)','Compra total',
-        ];
+        $filename = 'reporte_productos_'.now()->format('Ymd_His').'.xls';
 
-        return response()->stream(function () use ($groups, $agg, $columns) {
-            $out = fopen('php://output', 'w');
-            fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF)); // BOM UTF-8
-
-            // Totales globales
-            fputcsv($out, ['TOTALES (filtro completo)']);
-            fputcsv($out, ['Cantidad total','Compra total']);
-            fputcsv($out, [
-                number_format((float)$agg->cantidad_total, 2, '.', ''),
-                number_format((float)$agg->compra_total,   2, '.', ''),
-            ]);
-            fputcsv($out, []);
-
-            // Encabezados
-            fputcsv($out, $columns);
-
-            // Cuerpo por grupos
-            foreach ($groups as $g) {
-                foreach ($g['rows'] as $r) {
-                    fputcsv($out, [
-                        $r['numero'],
-                        $r['codigo_texto'],               // plano para CSV
-                        $r['nombre'],
-                        $r['proveedor'],
-                        $r['fecha_compra'],
-                        number_format($r['cantidad'], 2, '.', ''),
-                        number_format($r['precio_final'], 2, '.', ''),
-                        number_format($r['compra_total'], 2, '.', ''),
-                    ]);
-                }
-
-                // Fila adicional: VENDIDAS y STOCK
-                $stock    = $g['stock'];
-                $vendidas = is_null($stock) ? null : max(0, $g['sumCant'] - (float)$stock);
-
-                fputcsv($out, []); // separador visual
-                fputcsv($out, [
-                    '', '', 'Vendidas:',
-                    '', '',   // dejamos columnas de texto vacías
-                    is_null($vendidas) ? '—' : number_format($vendidas, 2, '.', ''),
-                    'Stock: '.(is_null($stock) ? '—' : number_format($stock, 2, '.', '')),
-                ]);
-                fputcsv($out, []); // otra línea en blanco entre grupos
+        $trs = '';
+        foreach ($groups as $g) {
+            foreach ($g['rows'] as $r) {
+                $trs .= "<tr>
+                    <td>{$r['numero']}</td>
+                    <td>{$r['codigo_texto']}</td>
+                    <td>{$this->esc((string)$r['nombre'])}</td>
+                    <td>{$this->esc((string)$r['proveedor'])}</td>
+                    <td>{$r['fecha_compra']}</td>
+                    <td style='text-align:right'>".number_format((float)$r['precio_compra_base'], 2, '.', '')."</td>
+                    <td style='text-align:right'>".number_format((float)$r['gastos_pct'], 2, '.', '')."%</td>
+                    <td style='text-align:right'>".number_format((float)$r['factor1_pct'], 2, '.', '')."%</td>
+                    <td style='text-align:right; font-weight:bold; background-color:#f0fdf4;'>$".number_format((float)$r['precio_compra_neto'], 2, '.', '')."</td>
+                    <td style='text-align:right'>".number_format((float)$r['cantidad'], 2, '.', '')."</td>
+                    <td style='text-align:right'>$".number_format((float)$r['precio_final'], 2, '.', '')."</td>
+                </tr>";
             }
+            $stock    = $g['stock'];
+            $vendidas = is_null($stock) ? null : max(0, $g['sumCant'] - (float)$stock);
 
-            fclose($out);
-        }, 200, $headers);
+            $trs .= "<tr style='background-color:#f1f5f9; font-weight:bold;'>
+                <td colspan='8'>Vendidas: ". (is_null($vendidas) ? '—' : number_format($vendidas,2,'.','')) ."</td>
+                <td colspan='3' style='text-align:right'>Stock Disponible: ". (is_null($stock) ? '—' : number_format($stock,2,'.','')) ."</td>
+            </tr>";
+        }
+
+        $html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<!--[if gte mso 9]>
+<xml>
+ <x:ExcelWorkbook>
+  <x:ExcelWorksheets>
+   <x:ExcelWorksheet>
+    <x:Name>Reporte de Productos</x:Name>
+    <x:WorksheetOptions>
+     <x:DisplayGridlines/>
+    </x:WorksheetOptions>
+   </x:ExcelWorksheet>
+  </x:ExcelWorksheets>
+ </x:ExcelWorkbook>
+</xml>
+<![endif]-->
+<style>
+  body { font-family: Arial, sans-serif; font-size: 11px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { background-color: #047857; color: #ffffff; font-weight: bold; border: 1px solid #065f46; padding: 8px; text-align: center; }
+  td { border: 1px solid #cbd5e1; padding: 6px; }
+  .card-main { background-color: #047857; color: #ffffff; font-size: 14px; font-weight: bold; padding: 10px; text-align: center; }
+</style>
+</head>
+<body>
+  <h2>REPORTE DE PRODUCTOS</h2>
+  <table style="margin-bottom: 12px;">
+    <tr>
+      <td colspan="4" class="card-main">Cantidad Total: ' . number_format((float)$agg->cantidad_total, 2, '.', '') . '</td>
+      <td colspan="4" class="card-main">Compra Total: $' . number_format((float)$agg->compra_total, 2, '.', '') . '</td>
+    </tr>
+  </table>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Número</th>
+        <th>Código</th>
+        <th>Nombre</th>
+        <th>Proveedor</th>
+        <th>Fecha de compra</th>
+        <th>Cantidad</th>
+        <th>Precio final (unit.)</th>
+        <th>Compra total</th>
+      </tr>
+    </thead>
+    <tbody>
+      ' . $trs . '
+    </tbody>
+  </table>
+</body>
+</html>';
+
+        return response($html, 200, [
+            'Content-Type'        => 'application/vnd.ms-excel; charset=UTF-8',
+            'Content-Disposition' => "attachment; filename=\"$filename\"",
+            'Cache-Control'       => 'max-age=0',
+        ]);
     }
 
-    /** ===================== EXPORT PDF (TODOS LOS FILTRADOS + SUBFILA VENDIDAS/STOCK) ===================== */
+    /** Legacy CSV alias -> exportExcel */
+    public function exportCsv(Request $request)
+    {
+        return $this->exportExcel($request);
+    }
+
+    /** ===================== EXPORT PDF ===================== */
     public function exportPdf(Request $request)
     {
         $q         = trim($request->string('q')->toString());
@@ -157,13 +189,11 @@ class ReportesProductosController extends Controller
 
         $base = $this->baseQuery($q, $codigo, $provQuery);
 
-        // Totales globales
         $agg = (clone $base)
             ->selectRaw('COALESCE(SUM(cantidad_compra),0) AS cantidad_total')
             ->selectRaw('COALESCE(SUM(cantidad_compra * precio_compra_final),0) AS compra_total')
             ->first();
 
-        // Traer todo para el PDF y agrupar por producto
         $all = $base->get([
             'id','producto_id','proveedor_id','fecha_compra','cantidad_compra','precio_compra_final'
         ]);
@@ -185,7 +215,6 @@ class ReportesProductosController extends Controller
             }
         }
 
-        // Armar HTML
         $style = 'table{width:100%;border-collapse:collapse;font-size:12px}
           th,td{border:1px solid #ccc;padding:6px}
           th{text-align:center;background:#f6f6f6}
@@ -255,7 +284,6 @@ class ReportesProductosController extends Controller
 
     /* ========================= HELPERS ========================= */
 
-    /** Query base reutilizable con filtros (incluye cantidad_total para STOCK) */
     private function baseQuery(string $q, string $codigo, string $provQuery)
     {
         return Lote::query()
@@ -275,32 +303,47 @@ class ReportesProductosController extends Controller
             ->latest('fecha_compra');
     }
 
-    /** Arma la fila que consumen UI/exports a partir de un Lote */
     private function rowFromLote($l)
     {
         $prod = $l->producto;
         $prov = $l->proveedor;
 
-        $cantidad    = (float) ($l->cantidad_compra ?? 0);
-        $precioFinal = (float) ($l->precio_compra_final ?? 0);
-        $compraTotal = round($cantidad * $precioFinal, 2);
+        $cantidad           = (float) ($l->cantidad_compra ?? 0);
+        $precioBase         = (float) ($l->precio_compra ?? 0);
+        $gastosPct          = (float) ($l->costo_general ?? 0);
+        $factor1Pct         = (float) ($l->costo_transporte ?? 0);
+        $gananciaPct        = (float) ($l->porcentaje_ganancia ?? 0);
+        $comisionPct        = (float) ($l->comision_pct ?? 0);
+        $precioFinal        = (float) ($l->precio_compra_final ?? 0);
 
-        $fecha = $l->fecha_compra ? Carbon::parse($l->fecha_compra)->format('Y-m-d') : '';
+        // Cálculo de Precio de Compra Neto = Precio Compra + Gastos($) + Factor 1($)
+        $gastosMonto        = $precioBase * ($gastosPct / 100);
+        $costoTotalProd     = $precioBase + $gastosMonto;
+        $factor1Monto       = $costoTotalProd * ($factor1Pct / 100);
+        $precioCompraNeto   = round($costoTotalProd + $factor1Monto, 2);
+
+        $compraTotal        = round($cantidad * $precioFinal, 2);
+        $fecha              = $l->fecha_compra ? Carbon::parse($l->fecha_compra)->format('Y-m-d') : '';
 
         return [
-            'numero'       => $l->id,
-            'codigo_html'  => $this->codigoPretty($prod?->codigo), // 2.º bloque grande/bold (solo PDF/HTML)
-            'codigo_texto' => (string) ($prod?->codigo ?? ''),      // CSV
-            'nombre'       => (string) ($prod?->nombre ?? '—'),
-            'proveedor'    => $prov ? ($prov->nombre.' — ['.$prov->ci_o_ruc.']') : '—',
-            'fecha_compra' => $fecha,
-            'cantidad'     => round($cantidad, 2),
-            'precio_final' => round($precioFinal, 2),
-            'compra_total' => $compraTotal,
+            'numero'             => $l->id,
+            'codigo_html'        => $this->codigoPretty($prod?->codigo),
+            'codigo_texto'       => (string) ($prod?->codigo ?? ''),
+            'nombre'             => (string) ($prod?->nombre ?? '—'),
+            'proveedor'          => $prov ? ($prov->nombre.' — ['.$prov->ci_o_ruc.']') : '—',
+            'fecha_compra'       => $fecha,
+            'cantidad'           => round($cantidad, 2),
+            'precio_compra_base' => round($precioBase, 2),
+            'gastos_pct'         => round($gastosPct, 2),
+            'factor1_pct'        => round($factor1Pct, 2),
+            'precio_compra_neto' => $precioCompraNeto,
+            'ganancia_pct'       => round($gananciaPct, 2),
+            'comision_pct'       => round($comisionPct, 2),
+            'precio_final'       => round($precioFinal, 2),
+            'compra_total'       => $compraTotal,
         ];
     }
 
-    /** Render del código con el 2.º segmento grande + negrita (para PDF/HTML) */
     private function codigoPretty(?string $codigo): string
     {
         if (!$codigo) return '—';

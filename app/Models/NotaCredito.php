@@ -13,7 +13,7 @@ class NotaCredito extends Model
         'estab','pto_emision','secuencial','numero',
         'autorizacion','fecha','estado',
         'subtotal','impuesto_15','impuesto_0','descuento','total',
-        'motivo','creada_por','actualizada_por',
+        'motivo','creada_por','actualizada_por','eliminada_por',
     ];
 
     protected $casts = [
@@ -34,6 +34,21 @@ class NotaCredito extends Model
     public function cliente()
     {
         return $this->belongsTo(Cliente::class);
+    }
+
+    public function creador()
+    {
+        return $this->belongsTo(User::class, 'creada_por');
+    }
+
+    public function actualizadoPor()
+    {
+        return $this->belongsTo(User::class, 'actualizada_por');
+    }
+
+    public function eliminadoPor()
+    {
+        return $this->belongsTo(User::class, 'eliminada_por');
     }
 
     public function detalles()

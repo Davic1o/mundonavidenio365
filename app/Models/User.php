@@ -11,6 +11,18 @@ class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable;
 
+    public const ROLE_SUPERADMIN    = 'Superadmin';
+    public const ROLE_ADMIN_GENERAL = 'Admin General';
+    public const ROLE_ADMIN         = 'Administrador';
+    public const ROLE_VENTAS        = 'Ventas';
+
+    public const ALL_ROLES = [
+        self::ROLE_SUPERADMIN,
+        self::ROLE_ADMIN_GENERAL,
+        self::ROLE_ADMIN,
+        self::ROLE_VENTAS,
+    ];
+
     protected $fillable = [
         'name',
         'email',
@@ -27,6 +39,49 @@ class User extends Authenticatable
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
     ];
+
+    /* ============================
+     * Roles y Permisos
+     * ============================ */
+
+    public function isSuperAdmin(): bool
+    {
+        return $this->role === self::ROLE_SUPERADMIN;
+    }
+
+    public function isAdminGeneral(): bool
+    {
+        return $this->role === self::ROLE_ADMIN_GENERAL;
+    }
+
+    public function isAdministrador(): bool
+    {
+        return $this->role === self::ROLE_ADMIN;
+    }
+
+    public function isVentas(): bool
+    {
+        return $this->role === self::ROLE_VENTAS;
+    }
+
+    public function hasPermission(string $permission): bool
+    {
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        $permissions = RolePermission::getPermissionsForRole($this->role);
+        return in_array($permission, $permissions, true);
+    }
+
+    public function getAllPermissions(): array
+    {
+        if ($this->isSuperAdmin()) {
+            return RolePermission::getAllPermissionKeys();
+        }
+
+        return RolePermission::getPermissionsForRole($this->role);
+    }
 
     /* ============================
      * Relaciones con auditoría
@@ -99,15 +154,28 @@ public function clientesActualizados()
     return $this->hasMany(Cliente::class, 'actualizado_por');
 }
 
-public function ventasCreadas()
-{
-    return $this->hasMany(Venta::class, 'creada_por');
-}
+    public function ventasCreadas()
+    {
+        return $this->hasMany(Venta::class, 'creada_por');
+    }
 
+    public function ventasActualizadas()
+    {
+        return $this->hasMany(Venta::class, 'actualizada_por');
+    }
 
+    public function ventasEliminadas()
+    {
+        return $this->hasMany(Venta::class, 'eliminada_por');
+    }
 
+    public function notasCreditoCreadas()
+    {
+        return $this->hasMany(NotaCredito::class, 'creada_por');
+    }
 
-
-
-
+    public function notasCreditoActualizadas()
+    {
+        return $this->hasMany(NotaCredito::class, 'actualizada_por');
+    }
 }

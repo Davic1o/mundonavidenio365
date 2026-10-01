@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
 import AdminLayout from '@/Layouts/AdminLayout';
 import { FiSearch, FiRefreshCw } from 'react-icons/fi';
+import useCan from '@/Hooks/useCan';
 
 /* Helpers paginator */
 const getData  = (p) => Array.isArray(p) ? p : (p?.data ?? []);
@@ -72,6 +73,9 @@ function Pagination({ page }) {
 }
 
 export default function Productos({ lotes, filtros }) {
+  const can = useCan();
+  const canExport = can('reportes_productos.export');
+
   const dataList = getData(lotes);
 
   // Filtros EXACTOS del backend: q, codigo, proveedor
@@ -143,15 +147,34 @@ export default function Productos({ lotes, filtros }) {
   }, [dataList]);
 
   return (
-    <AdminLayout title="Reporte de Productos">
-      <Head title="Reporte de Productos" />
+    <AdminLayout title="Catálogo de Productos y Costos Netos">
+      <Head title="Catálogo de Productos y Costos Netos" />
+
+      {/* Tarjetas resumen de encabezado */}
+      <div className="mb-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-4 shadow-sm">
+          <span className="text-xs font-bold uppercase tracking-wider text-emerald-800">Total En Catálogo</span>
+          <div className="mt-1 text-2xl font-black text-emerald-950">{dataList.length} registros</div>
+          <p className="text-[11px] text-emerald-700 mt-0.5">Mostrando productos cargados</p>
+        </div>
+        <div className="rounded-xl border border-sky-100 bg-sky-50/60 p-4 shadow-sm">
+          <span className="text-xs font-bold uppercase tracking-wider text-sky-800">Fórmula Precio Neto</span>
+          <div className="mt-1 text-sm font-extrabold text-sky-950">Base + Gastos(%) + Factor 1(%)</div>
+          <p className="text-[11px] text-sky-700 mt-0.5">Precio de compra neto unitario real</p>
+        </div>
+        <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-4 shadow-sm">
+          <span className="text-xs font-bold uppercase tracking-wider text-indigo-800">Normativa de Etiqueta</span>
+          <div className="mt-1 text-sm font-mono font-extrabold text-indigo-950">YY-ProdID-ProvID-INT-DEC</div>
+          <p className="text-[11px] text-indigo-700 mt-0.5">Código de barras escaneable por producto</p>
+        </div>
+      </div>
 
       {/* Filtros + Export */}
-      <div className="mb-4 rounded-xl border border-slate-200 bg-white">
+      <div className="mb-4 rounded-xl border border-slate-200 bg-white shadow-xs">
         <div className="p-4 sm:p-5">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Producto (nombre)</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1 uppercase tracking-wide">Buscar Producto</label>
               <div className="relative">
                 <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
@@ -159,27 +182,27 @@ export default function Productos({ lotes, filtros }) {
                   value={q.q}
                   onChange={(e) => setQ((s) => ({ ...s, q: e.target.value }))}
                   placeholder="Ej. Tornillo, Avena, etc."
-                  className="w-full pl-9 rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
+                  className="w-full pl-9 rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500 text-sm font-medium"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Código de producto</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1 uppercase tracking-wide">Código / Etiqueta</label>
               <div className="relative">
                 <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
                   value={q.codigo}
                   onChange={(e) => setQ((s) => ({ ...s, codigo: e.target.value }))}
-                  placeholder="Ej. 23-3456-34-345-35"
-                  className="w-full pl-9 rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
+                  placeholder="Ej. 26-12-5-13-23"
+                  className="w-full pl-9 rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500 text-sm font-medium"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Proveedor</label>
+              <label className="block text-xs font-bold text-slate-700 mb-1 uppercase tracking-wide">Proveedor</label>
               <div className="relative">
                 <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
@@ -187,90 +210,116 @@ export default function Productos({ lotes, filtros }) {
                   value={q.proveedor}
                   onChange={(e) => setQ((s) => ({ ...s, proveedor: e.target.value }))}
                   placeholder="Nombre o CI/RUC"
-                  className="w-full pl-9 rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
+                  className="w-full pl-9 rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500 text-sm font-medium"
                 />
               </div>
             </div>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
             <button
               type="button"
               onClick={clearFilters}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
             >
-              <FiRefreshCw className="w-4 h-4" /> Limpiar
+              <FiRefreshCw className="w-3.5 h-3.5" /> Limpiar Filtros
             </button>
 
-            <div className="flex gap-2">
-              <a
-                href={route('admin.reportes.productos.csv', exportParams)}
-                className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"
-              >
-                Exportar CSV
-              </a>
-              <a
-                href={route('admin.reportes.productos.pdf', exportParams)}
-                className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-              >
-                Exportar PDF
-              </a>
-            </div>
+            {canExport && (
+              <div className="flex gap-2">
+                <a
+                  href={route('admin.reportes.productos.excel', exportParams)}
+                  className="rounded-lg bg-emerald-700 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-800 transition shadow-xs"
+                >
+                  Descargar Excel (.xls)
+                </a>
+                <a
+                  href={route('admin.reportes.productos.pdf', exportParams)}
+                  className="rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-indigo-700 transition shadow-xs"
+                >
+                  Exportar PDF
+                </a>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       {/* Tabla principal */}
-      <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+      <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600">
-              <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-left">
-                <th className="whitespace-nowrap">ID</th>
+          <table className="min-w-full text-xs">
+            <thead className="bg-slate-100/80 text-slate-700 uppercase font-extrabold tracking-wider border-b border-slate-200">
+              <tr className="[&>th]:px-3.5 [&>th]:py-3 [&>th]:text-left">
+                <th className="whitespace-nowrap">Lote ID</th>
                 <th>Producto</th>
-                <th>Código</th>
+                <th>Etiqueta / Código</th>
                 <th>Proveedor</th>
-                <th>Fecha de compra</th>
-                <th className="text-right">Cantidad</th>
-                <th className="text-right">Precio final (unit.)</th>
-                <th className="text-right">Compra total</th>
+                <th className="text-right">Precio Base Unit.</th>
+                <th className="text-center">Gastos %</th>
+                <th className="text-center">Factor 1 %</th>
+                <th className="text-right bg-emerald-100/60 text-emerald-950 font-black">Precio Compra Neto</th>
+                <th className="text-right">PVP Final</th>
+                <th className="text-center">Stock Disponible</th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-slate-100">
               {dataList.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-6 text-center text-slate-500">
-                    No hay resultados para los filtros seleccionados.
+                  <td colSpan={10} className="px-4 py-8 text-center text-slate-500 font-medium">
+                    No hay productos o compras registradas con los filtros seleccionados.
                   </td>
                 </tr>
               )}
 
               {dataList.map((row, idx) => {
-                const precioTotal =
-                  row?.precio_total != null
-                    ? Number(row.precio_total)
-                    : Number(row?.cantidad_compra ?? 0) * Number(row?.precio_compra_final ?? 0);
+                const precioBase = Number(row?.precio_compra ?? 0);
+                const gastosPct = Number(row?.costo_general ?? 0);
+                const factor1Pct = Number(row?.costo_transporte ?? 0);
+
+                const gastosMonto = precioBase * (gastosPct / 100);
+                const costoTotalProd = precioBase + gastosMonto;
+                const factor1Monto = costoTotalProd * (factor1Pct / 100);
+                const precioCompraNeto = costoTotalProd + factor1Monto;
+
+                const pvpFinal = Number(row?.precio_compra_final ?? 0);
+                const stockDisponible = row?.producto?.cantidad_total ?? row?.cantidad_compra ?? 0;
 
                 return (
-                  <tr key={`${row.id}-${idx}`} className="hover:bg-slate-50">
-                    <td className="px-4 py-3">{row.id}</td>
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-slate-900">
+                  <tr key={`${row.id}-${idx}`} className="hover:bg-slate-50/80 transition">
+                    <td className="px-3.5 py-3 font-mono font-bold text-slate-500">#{row.id}</td>
+                    <td className="px-3.5 py-3">
+                      <div className="font-bold text-slate-900 text-sm">
                         {row.producto?.nombre ?? '—'}
                       </div>
+                      <span className="text-[10px] text-slate-400 font-medium">Fecha: {fmtDate(row.fecha_compra)}</span>
                     </td>
-                    <td className="px-4 py-3">
-                      <FormattedCodigo codigo={row.producto?.codigo} />
+                    <td className="px-3.5 py-3">
+                      <div className="inline-block bg-indigo-50/80 px-2.5 py-1 rounded-lg border border-indigo-100 font-mono text-indigo-950 font-bold text-xs">
+                        <FormattedCodigo codigo={row.producto?.codigo} />
+                      </div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3.5 py-3 text-slate-600 font-medium">
                       {row.proveedor?.nombre ?? '—'}
-                      {row.proveedor?.ci_o_ruc ? ` — [${row.proveedor.ci_o_ruc}]` : ''}
+                      {row.proveedor?.ci_o_ruc ? <span className="text-[10px] text-slate-400 block font-mono">{row.proveedor.ci_o_ruc}</span> : ''}
                     </td>
-                    <td className="px-4 py-3">{fmtDate(row.fecha_compra)}</td>
-                    <td className="px-4 py-3 text-right">{row.cantidad_compra ?? 0}</td>
-                    <td className="px-4 py-3 text-right">{money(row.precio_compra_final ?? 0)}</td>
-                    <td className="px-4 py-3 text-right">{money(precioTotal)}</td>
+                    <td className="px-3.5 py-3 text-right font-semibold text-slate-700">{money(precioBase)}</td>
+                    <td className="px-3.5 py-3 text-center text-slate-600 font-medium">
+                      {gastosPct > 0 ? <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-bold">{gastosPct}%</span> : '0%'}
+                    </td>
+                    <td className="px-3.5 py-3 text-center text-slate-600 font-medium">
+                      {factor1Pct > 0 ? <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-bold">{factor1Pct}%</span> : '0%'}
+                    </td>
+                    <td className="px-3.5 py-3 text-right font-extrabold text-emerald-800 bg-emerald-50/70 border-x border-emerald-100 text-sm">
+                      {money(precioCompraNeto)}
+                    </td>
+                    <td className="px-3.5 py-3 text-right font-bold text-slate-900 text-sm">{money(pvpFinal)}</td>
+                    <td className="px-3.5 py-3 text-center">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold ${stockDisponible > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                        {stockDisponible} u.
+                      </span>
+                    </td>
                   </tr>
                 );
               })}
@@ -279,14 +328,14 @@ export default function Productos({ lotes, filtros }) {
             {/* Fila RESUMEN final */}
             {resumen && (
               <tfoot>
-                <tr className="bg-slate-50/60">
-                  <td colSpan={6} className="px-4 py-2 text-xs text-slate-700">
-                    <span className="font-medium">Vendidas (consulta):</span>{' '}
-                    {resumen.vendidas ?? '—'}
+                <tr className="bg-slate-100/90 font-bold border-t border-slate-200">
+                  <td colSpan={7} className="px-4 py-2.5 text-xs text-slate-700">
+                    <span className="font-extrabold uppercase">Unidades Vendidas (Consulta):</span>{' '}
+                    <span className="text-indigo-700 font-black">{resumen.vendidas ?? '—'} u.</span>
                   </td>
-                  <td colSpan={2} className="px-4 py-2 text-xs text-right text-slate-700">
-                    <span className="font-medium">Stock:</span>{' '}
-                    {resumen.stock ?? '—'}
+                  <td colSpan={3} className="px-4 py-2.5 text-xs text-right text-slate-700">
+                    <span className="font-extrabold uppercase">Stock Total Disponible:</span>{' '}
+                    <span className="text-emerald-700 font-black">{resumen.stock ?? '—'} u.</span>
                   </td>
                 </tr>
               </tfoot>
@@ -294,7 +343,7 @@ export default function Productos({ lotes, filtros }) {
           </table>
         </div>
 
-        <div className="px-4 pb-4">
+        <div className="px-4 pb-4 border-t border-slate-100 pt-2">
           <Pagination page={lotes} />
         </div>
       </div>

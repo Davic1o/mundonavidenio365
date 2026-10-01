@@ -24,12 +24,14 @@ class RedirectIfAuthenticated
     $user = Auth::user();
 
     switch ($user->role) {
+        case 'Superadmin':
+        case 'Admin General':
         case 'Administrador':
             return redirect()->route('admin.dashboard.index');
         case 'Ventas':
             return redirect()->route('ventas.dashboard.index');
         default:
-            return redirect()->route('dashboard');
+            return redirect()->route('admin.dashboard.index');
     }
 }
 

@@ -92,7 +92,7 @@ class EmpresaController extends Controller
                 $existing ? Rule::unique('empresas','ruc')->ignore($existing->id) : 'unique:empresas,ruc',
             ],
             'firma_b64'                      => ['nullable','string'],
-            'firma_nombre'                   => ['required_with:firma_b64','string','max:255'],
+            'firma_nombre'                   => ['nullable','required_with:firma_b64','string','max:255'],
             'firma'                          => ['nullable','file','max:10240'],
             'clave_firma_electronica'        => ['nullable','string'],
         ]);

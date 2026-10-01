@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from '@inertiajs/react';
 import AutoComplete from '@/Components/AutoComplete';
+import useCan from '@/Hooks/useCan';
 
 function fmt(n) {
   const v = Number(n ?? 0);
@@ -47,25 +48,31 @@ export default function LoteForm({
   onCancel,
 }) {
   const isEdit = Boolean(initial?.id);
+  const can = useCan();
+  const canProveedores = can('compras.proveedores');
 
-  const { data, setData, post, put, processing, errors, reset, clearErrors } = useForm({
+  const fCompraInit = initial?.fecha_compra
+    ? String(initial.fecha_compra).slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+
+  const { data, setData, post, put, transform, processing, errors, reset, clearErrors } = useForm({
     // IDs
-    producto_id: initial?.producto_id ?? '',
-    proveedor_id: initial?.proveedor_id ?? '',
+    producto_id: initial?.producto_id ? String(initial.producto_id) : '',
+    proveedor_id: initial?.proveedor_id ? String(initial.proveedor_id) : '',
 
     // proveedor (solo si "nuevo")
     proveedor: { nombre: '', ci_o_ruc: '', telefono: '' },
 
     // lote
-    cantidad_compra: initial?.cantidad_compra ?? '',
-    fecha_compra: initial?.fecha_compra ?? new Date().toISOString().slice(0, 10),
+    cantidad_compra: initial?.cantidad_compra != null ? String(initial.cantidad_compra) : '',
+    fecha_compra: fCompraInit,
 
-    // ⚠️ SIN ceros por defecto (todo en blanco)
-    precio_compra: initial?.precio_compra ?? '',
-    costo_general: initial?.costo_general ?? '',
-    costo_transporte: initial?.costo_transporte ?? '',
-    porcentaje_ganancia: initial?.porcentaje_ganancia ?? '',
-    precio_compra_final: initial?.precio_compra_final ?? '',
+    precio_compra: initial?.precio_compra != null ? String(initial.precio_compra) : '',
+    costo_general: initial?.costo_general != null ? String(initial.costo_general) : '',
+    costo_transporte: initial?.costo_transporte != null ? String(initial.costo_transporte) : '',
+    porcentaje_ganancia: initial?.porcentaje_ganancia != null ? String(initial.porcentaje_ganancia) : '',
+    comision_pct: initial?.comision_pct != null ? String(initial.comision_pct) : '',
+    precio_compra_final: initial?.precio_compra_final != null ? String(initial.precio_compra_final) : '',
   });
 
   /* ===========================
@@ -75,14 +82,29 @@ export default function LoteForm({
   const [nuevoProductoNombre, setNuevoProductoNombre] = useState('');
   const [modoProveedor, setModoProveedor] = useState(initial?.proveedor_id ? 'existente' : 'existente');
 
-  // Control de cálculo
-  const [lastChanged, setLastChanged] = useState(null); // 'base'|'porcentaje'|'final'
+  /* ===========================
+   * Estados de Gastos, Factor 1, Ganancia, Factor 2 (% / $)
+   * =========================== */
+  const [gastosModo, setGastosModo] = useState('pct'); // 'pct' | 'val'
+  const [gastosVal, setGastosVal] = useState(initial?.costo_general != null ? String(initial.costo_general) : '');
+
+  const [factor1Modo, setFactor1Modo] = useState('pct'); // 'pct' | 'val'
+  const [factor1Val, setFactor1Val] = useState(initial?.costo_transporte != null ? String(initial.costo_transporte) : '');
+
+  const [gananciaModo, setGananciaModo] = useState('pct'); // 'pct' | 'val'
+  const [gananciaVal, setGananciaVal] = useState(initial?.porcentaje_ganancia != null ? String(initial.porcentaje_ganancia) : '');
+
+  const [factor2Modo, setFactor2Modo] = useState('pct'); // 'pct'
+  const [factor2Val, setFactor2Val] = useState(initial?.comision_pct != null ? String(initial.comision_pct) : '');
+
   const justUpdatedRef = useRef(false);
 
   // ====== REFS ======
   const formRef = useRef(null);
 
+  const refProdExistente = useRef(null);
   const refProdNuevo = useRef(null);
+  const refProvExistente = useRef(null);
   const refProvNombre = useRef(null);
   const refProvCI = useRef(null);
   const refProvTel = useRef(null);
@@ -90,15 +112,43 @@ export default function LoteForm({
   const refCantidad = useRef(null);
   const refFecha = useRef(null);
   const refPrecio = useRef(null);
-  const refGeneral = useRef(null);
-  const refTransporte = useRef(null);
-  const refPorcentaje = useRef(null);
+  const refGastos = useRef(null);
+  const refFactor1 = useRef(null);
+  const refGanancia = useRef(null);
+  const refFactor2 = useRef(null);
   const refFinal = useRef(null);
+
+  function focusProveedor() {
+    setTimeout(() => {
+      if (modoProveedor === 'existente') {
+        if (refProvExistente.current) {
+          refProvExistente.current.focus();
+          refProvExistente.current.select?.();
+        }
+      } else {
+        if (refProvNombre.current) {
+          refProvNombre.current.focus();
+          refProvNombre.current.select?.();
+        }
+      }
+    }, 50);
+  }
+
+  function focusCantidad() {
+    setTimeout(() => {
+      if (refCantidad.current) {
+        refCantidad.current.focus();
+        refCantidad.current.select?.();
+      }
+    }, 50);
+  }
 
   // Orden dinámico de enfoque según lo visible
   const orderedRefs = useMemo(() => {
     const arr = [];
+    if (!isEdit && modoProducto === 'existente') arr.push({ key: 'prodExistente', ref: refProdExistente });
     if (!isEdit && modoProducto === 'nuevo') arr.push({ key: 'prodNuevo', ref: refProdNuevo });
+    if (modoProveedor === 'existente') arr.push({ key: 'provExistente', ref: refProvExistente });
     if (modoProveedor === 'nuevo') {
       arr.push({ key: 'provNombre', ref: refProvNombre });
       arr.push({ key: 'provCI', ref: refProvCI });
@@ -108,9 +158,10 @@ export default function LoteForm({
       { key: 'cantidad', ref: refCantidad },
       { key: 'fecha', ref: refFecha },
       { key: 'precio', ref: refPrecio },
-      { key: 'general', ref: refGeneral },
-      { key: 'transporte', ref: refTransporte },
-      { key: 'porcentaje', ref: refPorcentaje },
+      { key: 'gastos', ref: refGastos },
+      { key: 'factor1', ref: refFactor1 },
+      { key: 'ganancia', ref: refGanancia },
+      { key: 'factor2', ref: refFactor2 },
       { key: 'final', ref: refFinal },
     );
     return arr;
@@ -131,9 +182,8 @@ export default function LoteForm({
     }
   }
 
-  // Mapea el elemento activo a su key en orderedRefs
   function keyFromElement(el) {
-    const idx = orderedRefs.findIndex(r => r.ref.current === el);
+    const idx = orderedRefs.findIndex(r => r.ref?.current === el);
     return idx >= 0 ? orderedRefs[idx].key : null;
   }
 
@@ -144,13 +194,13 @@ export default function LoteForm({
     const el = e.target;
     const tag = el.tagName.toLowerCase();
 
-    // Deja que textareas u otros widgets manejen sus flechas si prefieres
+    // Deja que textareas y autocompletes manejen sus propias flechas
     if (tag === 'textarea') return;
+    if (el?.closest?.('[data-autocomplete]')) return;
 
     const key = keyFromElement(el);
     if (!key) return;
 
-    // Evita el comportamiento nativo (spinners en number, calendario en date, mover cursor)
     e.preventDefault();
 
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
@@ -161,90 +211,129 @@ export default function LoteForm({
   }
 
   useEffect(() => {
-    // Reiniciar al cambiar de registro a editar
+    if (!initial) return;
+
+    const fCompra = initial.fecha_compra
+      ? String(initial.fecha_compra).slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+
     setData({
-      producto_id: initial?.producto_id ?? '',
-      proveedor_id: initial?.proveedor_id ?? '',
+      producto_id: initial.producto_id ? String(initial.producto_id) : '',
+      proveedor_id: initial.proveedor_id ? String(initial.proveedor_id) : '',
       proveedor: { nombre: '', ci_o_ruc: '', telefono: '' },
 
-      cantidad_compra: initial?.cantidad_compra ?? '',
-      fecha_compra: initial?.fecha_compra ?? new Date().toISOString().slice(0, 10),
+      cantidad_compra: initial.cantidad_compra != null ? String(initial.cantidad_compra) : '',
+      fecha_compra: fCompra,
 
-      precio_compra: initial?.precio_compra ?? '',
-      costo_general: initial?.costo_general ?? '',
-      costo_transporte: initial?.costo_transporte ?? '',
-      porcentaje_ganancia: initial?.porcentaje_ganancia ?? '',
-      precio_compra_final: initial?.precio_compra_final ?? '',
+      precio_compra: initial.precio_compra != null ? String(initial.precio_compra) : '',
+      costo_general: initial.costo_general != null ? String(initial.costo_general) : '',
+      costo_transporte: initial.costo_transporte != null ? String(initial.costo_transporte) : '',
+      porcentaje_ganancia: initial.porcentaje_ganancia != null ? String(initial.porcentaje_ganancia) : '',
+      comision_pct: initial.comision_pct != null ? String(initial.comision_pct) : '',
+      precio_compra_final: initial.precio_compra_final != null ? String(initial.precio_compra_final) : '',
     });
-    setModoProducto(initial?.producto_id ? 'existente' : 'existente');
-    setModoProveedor(initial?.proveedor_id ? 'existente' : 'existente');
+
+    setModoProducto(initial.producto_id ? 'existente' : 'existente');
+    setModoProveedor(initial.proveedor_id ? 'existente' : 'existente');
     setNuevoProductoNombre('');
+    setGastosVal(initial.costo_general != null ? String(initial.costo_general) : '');
+    setFactor1Val(initial.costo_transporte != null ? String(initial.costo_transporte) : '');
+    setGananciaVal(initial.porcentaje_ganancia != null ? String(initial.porcentaje_ganancia) : '');
+    setFactor2Val(initial.comision_pct != null ? String(initial.comision_pct) : '');
     clearErrors();
-    setLastChanged(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initial?.id]);
+  }, [initial]);
 
-  /* ========== SOLO INFORMACIÓN: ÚLTIMA COMPRA ========== */
-  const isCreateWithPreset = !isEdit && !!initial;
-  const suggested = useMemo(() => {
-    if (!isCreateWithPreset) return null;
-    const prod = initial?.producto || null; // solo {codigo, nombre}
-    return {
-      producto: prod,
-      fecha: initial?.fecha_compra ?? null,
-    };
-  }, [isCreateWithPreset, initial]);
+  /* ========== CÁLCULOS MATEMÁTICOS ========== */
+  const cantNum = Number(data.cantidad_compra || 0);
+  const precioCompraBase = Number(data.precio_compra || 0);
 
-  /* ========== Cálculos ========== */
-  const cantidad = Number(data.cantidad_compra || 0);
-  const precioUnitario = Number(data.precio_compra || 0);
-  const pctGeneral = Number(data.costo_general || 0);
-  const pctTransp  = Number(data.costo_transporte || 0);
+  // 1. GASTOS
+  const gValNum = Number(gastosVal || 0);
+  const gastosMonto = gastosModo === 'pct' ? precioCompraBase * (gValNum / 100) : gValNum;
+  const gastosPctEquiv = precioCompraBase > 0 ? (gastosMonto / precioCompraBase) * 100 : 0;
+  const costoTotalProducto = precioCompraBase + gastosMonto;
 
-  const addGeneralUnit = useMemo(() => (precioUnitario || 0) * (pctGeneral/100), [precioUnitario, pctGeneral]);
-  const addTranspUnit  = useMemo(() => (precioUnitario || 0) * (pctTransp/100),  [precioUnitario, pctTransp]);
+  // 2. FACTOR 1
+  const f1ValNum = Number(factor1Val || 0);
+  const factor1Monto = factor1Modo === 'pct' ? costoTotalProducto * (f1ValNum / 100) : f1ValNum;
+  const factor1PctEquiv = costoTotalProducto > 0 ? (factor1Monto / costoTotalProducto) * 100 : 0;
+  const subtotal1 = costoTotalProducto + factor1Monto;
 
-  const baseUnit = useMemo(() => {
-    return (precioUnitario || 0) + addGeneralUnit + addTranspUnit;
-  }, [precioUnitario, addGeneralUnit, addTranspUnit]);
+  // 3. GANANCIA (%) - Fórmula Comercial Estándar: Subtotal 2 = Subtotal 1 / (1 - (Ganancia% / 100))
+  const ganValNum = Number(gananciaVal || 0);
+  const gananciaPctClamped = Math.min(99.99, Math.max(0, ganValNum));
+  const factorMargen = (100 - gananciaPctClamped) / 100;
+  const subtotal2 = (subtotal1 > 0 && factorMargen > 0) ? (subtotal1 / factorMargen) : subtotal1;
+  const gananciaMonto = subtotal2 - subtotal1;
+  const gananciaPctEquiv = ganValNum;
 
-  const porcentaje = data.porcentaje_ganancia === '' ? null : Number(data.porcentaje_ganancia);
-  const finalUnitario = data.precio_compra_final === '' ? null : Number(data.precio_compra_final);
+  // 4. IVA (%)
+  const f2ValNum = Number(factor2Val || 0);
+  const factor2Monto = subtotal2 * (f2ValNum / 100);
+  const factor2PctEquiv = f2ValNum;
+
+  // 5. PVP FINAL
+  const pvpCalculado = subtotal2 + factor2Monto;
 
   useEffect(() => {
-    if (justUpdatedRef.current) { justUpdatedRef.current = false; return; }
-
-    if (lastChanged === 'base' || lastChanged === 'porcentaje') {
-      if (baseUnit > 0 && porcentaje != null && !Number.isNaN(porcentaje)) {
-        const nuevoFinal = +(baseUnit * (1 + (porcentaje / 100))).toFixed(2);
-        const actualFinal = finalUnitario == null ? null : +Number(finalUnitario).toFixed(2);
-        if (actualFinal === null || Math.abs(nuevoFinal - actualFinal) >= 0.01) {
-          justUpdatedRef.current = true;
-          setData('precio_compra_final', String(nuevoFinal));
-        }
+    if (justUpdatedRef.current) {
+      justUpdatedRef.current = false;
+      return;
+    }
+    if (pvpCalculado > 0) {
+      const calcStr = pvpCalculado.toFixed(2);
+      if (data.precio_compra_final !== calcStr) {
+        setData('precio_compra_final', calcStr);
       }
     }
+  }, [precioCompraBase, gastosVal, gastosModo, factor1Val, factor1Modo, gananciaVal, factor2Val, factor2Modo]);
 
-    if (lastChanged === 'final') {
-      if (baseUnit > 0 && finalUnitario != null) {
-        const nuevoPorc = +(((finalUnitario / baseUnit) - 1) * 100).toFixed(2);
-        const actualPorc = porcentaje == null ? null : +Number(porcentaje).toFixed(2);
-        if (actualPorc === null || Math.abs(nuevoPorc - actualPorc) >= 0.01) {
-          justUpdatedRef.current = true;
-          setData('porcentaje_ganancia', String(nuevoPorc));
-        }
-      }
+  /* ========== PRECÁLCULO CÓDIGO ETIQUETA (NORMATIVA BACKEND YY-ProdID-ProvID-INT-DEC) ==========
+   * Base Etiqueta = (Precio Compra + Gastos + Factor 1) * (1 + IVA%/100)
+   */
+  const valorEtiquetaBase = useMemo(() => {
+    const ivaPct = Number(factor2Val || 0); // factor2Val representa %IVA
+    const baseMasGastosFactor1 = subtotal1; // (precio_compra + gastos + factor1)
+    return baseMasGastosFactor1 * (1 + (ivaPct / 100));
+  }, [subtotal1, factor2Val]);
+
+  const codigoEtiquetaProyectado = useMemo(() => {
+    // Si estamos editando, el código del producto es fijo y no cambia
+    if (isEdit && initial?.producto?.codigo) {
+      return initial.producto.codigo;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUnit, porcentaje, finalUnitario, lastChanged]);
 
-  const precioTotal = useMemo(() => {
-    const cant = Number(data.cantidad_compra || 0);
-    const unitFinal = Number(data.precio_compra_final || 0);
-    return cant * unitFinal;
-  }, [data.cantidad_compra, data.precio_compra_final]);
+    const fStr = data.fecha_compra || new Date().toISOString().slice(0, 10);
+    const d = new Date(fStr + 'T00:00:00');
+    const fullYear = !isNaN(d.getFullYear()) ? d.getFullYear() : new Date().getFullYear();
+    const yy = String(fullYear).slice(-2);
 
-  /* Crear producto rápido por GET (sin CSRF) */
+    const pId = data.producto_id || (modoProducto === 'nuevo' ? 'NUEVO' : '?');
+    const provId = data.proveedor_id || (modoProveedor === 'nuevo' ? 'NUEVO' : '?');
+
+    const totalRedondeado = Math.round((valorEtiquetaBase || 0) * 100) / 100;
+    const entero = Math.floor(totalRedondeado);
+    const decVal = Math.round((totalRedondeado - entero) * 100);
+    const decStr = String(decVal).padStart(2, '0');
+
+    return `${yy}-${pId}-${provId}-${entero}-${decStr}`;
+  }, [data.fecha_compra, data.producto_id, modoProducto, data.proveedor_id, modoProveedor, valorEtiquetaBase, isEdit, initial]);
+
+  function handleFinalChange(e) {
+    const val = e.target.value;
+    setData('precio_compra_final', val);
+    justUpdatedRef.current = true;
+    const finalNum = Number(val || 0);
+    const targetSub2 = finalNum - factor2Monto;
+    if (targetSub2 > 0 && subtotal1 > 0) {
+      // Fórmula inversa comercial: Ganancia% = (1 - (Subtotal 1 / Subtotal 2)) * 100
+      const porc = ((1 - (subtotal1 / targetSub2)) * 100).toFixed(2);
+      setGananciaVal(porc);
+    }
+  }
+
+  /* Crear producto rápido por GET */
   async function crearProductoRapido() {
     const nombre = (nuevoProductoNombre || '').trim().toUpperCase();
     if (!nombre) { alert('Ingresa el nombre del producto.'); return; }
@@ -256,15 +345,17 @@ export default function LoteForm({
       });
       if (!resp.ok) throw new Error('Error al crear producto');
       const nuevo = await resp.json();
+      setLocalProductos(prev => [...prev, nuevo]);
       setModoProducto('existente');
       setData('producto_id', String(nuevo.id));
       setNuevoProductoNombre('');
+      focusProveedor();
     } catch {
       alert('No se pudo crear el producto. Intenta con otro nombre.');
     }
   }
 
-  /* Crear proveedor rápido por GET (sin CSRF) */
+  /* Crear proveedor rápido por GET */
   async function crearProveedorRapido() {
     const payload = {
       nombre: data.proveedor?.nombre || '',
@@ -287,9 +378,11 @@ export default function LoteForm({
       });
       if (!resp.ok) throw new Error('Error al crear proveedor');
       const nuevo = await resp.json();
+      setLocalProveedores(prev => [...prev, nuevo]);
       setModoProveedor('existente');
       setData('proveedor_id', String(nuevo.id));
       setData('proveedor', { nombre: '', ci_o_ruc: '', telefono: '' });
+      focusCantidad();
     } catch {
       alert(errors?.proveedor || 'No se pudo crear el proveedor.');
     }
@@ -297,29 +390,53 @@ export default function LoteForm({
 
   function submit(e) {
     e.preventDefault();
-    const payload = {
-      ...data,
-      proveedor_id: (modoProveedor === 'existente') ? data.proveedor_id : null,
-      proveedor:    (modoProveedor === 'nuevo')     ? data.proveedor    : null,
-      base_unitario: +baseUnit.toFixed(4),
-      costo_general_unit: +addGeneralUnit.toFixed(4),
-      costo_transporte_unit: +addTranspUnit.toFixed(4),
-    };
+    const finalVal = Number(data.precio_compra_final || pvpCalculado.toFixed(2));
+
+    transform((currentData) => ({
+      ...currentData,
+      producto_id:         (modoProducto === 'existente')  ? (currentData.producto_id || null) : null,
+      producto_nombre:     (modoProducto === 'nuevo')      ? (nuevoProductoNombre || '').trim().toUpperCase() : null,
+      proveedor_id:        (modoProveedor === 'existente') ? (currentData.proveedor_id || null) : null,
+      proveedor:           (modoProveedor === 'nuevo')     ? currentData.proveedor : null,
+      valor_base_etiqueta: +(valorEtiquetaBase || 0).toFixed(4),
+      costo_general:       +gastosPctEquiv.toFixed(2),
+      costo_transporte:    +factor1PctEquiv.toFixed(2),
+      porcentaje_ganancia: +gananciaPctEquiv.toFixed(2),
+      comision_pct:        +factor2PctEquiv.toFixed(2),
+      precio_compra_final: finalVal,
+      base_unitario:       +costoTotalProducto.toFixed(4),
+      costo_general_unit:  +gastosMonto.toFixed(4),
+      costo_transporte_unit: +factor1Monto.toFixed(4),
+    }));
+
     const opts = { preserveScroll: true, onSuccess: () => { reset(); onSuccess?.(); } };
-    // Nota: si quieres enviar "payload", usa post(url, payload, opts). Mantengo tu patrón original.
     if (isEdit) put(route('admin.compras.update', initial.id), opts);
     else post(route('admin.compras.store'), opts);
   }
 
-  // defaultText para autocompletes (no autollenan, solo display)
+  const [localProductos, setLocalProductos] = useState(productos);
+  const [localProveedores, setLocalProveedores] = useState(proveedores);
+
+  useEffect(() => setLocalProductos(productos), [productos]);
+  useEffect(() => setLocalProveedores(proveedores), [proveedores]);
+
   const defaultProdText = useMemo(() => {
-    const p = productos.find(x => String(x.id) === String(data.producto_id)) ?? null;
+    if (!data.producto_id) return '';
+    if (isEdit && initial?.producto && String(initial.producto.id) === String(data.producto_id)) {
+      return fmtProdText(initial.producto);
+    }
+    let p = localProductos.find(x => String(x.id) === String(data.producto_id)) ?? null;
     return fmtProdText(p);
-  }, [productos, data.producto_id]);
+  }, [localProductos, data.producto_id, isEdit, initial]);
+  
   const defaultProvText = useMemo(() => {
-    const p = proveedores.find(x => String(x.id) === String(data.proveedor_id)) ?? null;
+    if (!data.proveedor_id) return '';
+    if (isEdit && initial?.proveedor && String(initial.proveedor.id) === String(data.proveedor_id)) {
+      return fmtProvText(initial.proveedor);
+    }
+    let p = localProveedores.find(x => String(x.id) === String(data.proveedor_id)) ?? null;
     return fmtProvText(p);
-  }, [proveedores, data.proveedor_id]);
+  }, [localProveedores, data.proveedor_id, isEdit, initial]);
 
   return (
     <form
@@ -328,38 +445,6 @@ export default function LoteForm({
       onKeyDownCapture={handleKeyDownCapture}
       className="space-y-6"
     >
-
-      {/* ======= TARJETA INFORMATIVA: ÚLTIMA COMPRA ======= */}
-      {isCreateWithPreset && suggested?.producto && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-amber-900">Último producto ingresado</h3>
-                <Badge>informativo</Badge>
-              </div>
-              <div className="mt-2 text-sm text-amber-900/90 space-y-1">
-                <div>
-                  <span className="font-medium">Producto:</span>{' '}
-                  {fmtProdText(suggested.producto) || '—'}
-                </div>
-                {initial?.producto?.codigo && (
-                  <div className="flex items-baseline gap-2">
-                    <span className="font-medium">Código:</span>{' '}
-                    <CodigoPretty codigo={initial.producto.codigo} />
-                  </div>
-                )}
-                {suggested.fecha && (
-                  <div>
-                    <span className="font-medium">Fecha referencia:</span>{' '}
-                    {fmtDateShort(suggested.fecha)}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* =================== PRODUCTO =================== */}
       <div>
@@ -390,13 +475,20 @@ export default function LoteForm({
         {modoProducto === 'existente' ? (
           <div>
             <AutoComplete
+              inputRef={refProdExistente}
               disabled={isEdit}
               searchRouteName="admin.productos.buscar"
-              initialItems={productos}
+              initialItems={localProductos}
               placeholder="Escribe para buscar producto por nombre o código"
               defaultText={defaultProdText}
               formatItem={(p) => fmtProdText(p)}
-              onSelect={(p) => setData('producto_id', String(p.id))}
+              onSelect={(p) => {
+                setData('producto_id', String(p.id));
+                focusProveedor();
+              }}
+              onEnterKey={() => {
+                focusProveedor();
+              }}
             />
             {errors.producto_id && <p className="mt-1 text-sm text-secondary-600">{errors.producto_id}</p>}
           </div>
@@ -410,6 +502,12 @@ export default function LoteForm({
                 className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
                 value={nuevoProductoNombre}
                 onChange={(e) => setNuevoProductoNombre(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    crearProductoRapido();
+                  }
+                }}
                 placeholder="Ej. Avena 1kg"
                 disabled={isEdit}
                 required
@@ -433,35 +531,46 @@ export default function LoteForm({
       <div>
         <div className="flex items-center gap-4 mb-2">
           <span className="text-sm font-medium text-slate-700">Proveedor</span>
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input
-              type="radio"
-              className="rounded border-slate-300"
-              checked={modoProveedor === 'existente'}
-              onChange={() => { setModoProveedor('existente'); setData('proveedor', { nombre:'', ci_o_ruc:'', telefono:'' }); }}
-            />
-            Existente
-          </label>
-          <label className="inline-flex items-center gap-2 text-sm">
-            <input
-              type="radio"
-              className="rounded border-slate-300"
-              checked={modoProveedor === 'nuevo'}
-              onChange={() => { setModoProveedor('nuevo'); setData('proveedor_id', ''); }}
-            />
-            Nuevo
-          </label>
+          {canProveedores && (
+            <>
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  className="rounded border-slate-300"
+                  checked={modoProveedor === 'existente'}
+                  onChange={() => { setModoProveedor('existente'); setData('proveedor', { nombre:'', ci_o_ruc:'', telefono:'' }); }}
+                />
+                Existente
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  className="rounded border-slate-300"
+                  checked={modoProveedor === 'nuevo'}
+                  onChange={() => { setModoProveedor('nuevo'); setData('proveedor_id', ''); }}
+                />
+                Nuevo
+              </label>
+            </>
+          )}
         </div>
 
         {modoProveedor === 'existente' ? (
           <div>
             <AutoComplete
+              inputRef={refProvExistente}
               searchRouteName="admin.proveedores.buscar"
-              initialItems={proveedores}
+              initialItems={localProveedores}
               placeholder="Escribe para buscar proveedor por nombre o CI/RUC"
               defaultText={defaultProvText}
               formatItem={(p) => fmtProvText(p)}
-              onSelect={(p) => setData('proveedor_id', String(p.id))}
+              onSelect={(p) => {
+                setData('proveedor_id', String(p.id));
+                focusCantidad();
+              }}
+              onEnterKey={() => {
+                focusCantidad();
+              }}
             />
             {errors.proveedor_id && <p className="mt-1 text-sm text-secondary-600">{errors.proveedor_id}</p>}
           </div>
@@ -519,134 +628,268 @@ export default function LoteForm({
         )}
       </div>
 
-      {/* =================== DATOS DEL LOTE =================== */}
-      <div className="grid grid-cols-1 sm:grid-cols-6 gap-3">
-        <div className="sm:col-span-1">
-          <label className="block text-sm font-medium text-slate-700 mb-1">Cantidad</label>
-          <input
-            ref={refCantidad}
-            type="number"
-            min="1"
-            className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
-            value={data.cantidad_compra}
-            onChange={(e) => { setData('cantidad_compra', e.target.value); }}
-            placeholder=""
-            required
-          />
-          {errors.cantidad_compra && <p className="mt-1 text-sm text-secondary-600">{errors.cantidad_compra}</p>}
+      {/* =================== CÁLCULO FINANCIERO Y VALORES =================== */}
+      <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4 shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
+          <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+            <span className="text-base">📊</span> Desglose de Costos, Comisión y PVP
+          </h3>
+          <span className="text-xs font-medium text-slate-500">Cálculo dinámico en tiempo real</span>
         </div>
 
-        <div className="sm:col-span-2">
-          <label className="block text-sm font-medium text-slate-700 mb-1">Fecha de compra</label>
-          <input
-            ref={refFecha}
-            type="date"
-            className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
-            value={data.fecha_compra}
-            onChange={(e) => setData('fecha_compra', e.target.value)}
-            required
-          />
-          {errors.fecha_compra && <p className="mt-1 text-sm text-secondary-600">{errors.fecha_compra}</p>}
+        {/* TARJETA VISUAL: CÓDIGO DE ETIQUETA PROYECTADO (NORMATIVA BACKEND) */}
+        <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-xs">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm">🏷️</span>
+              <h4 className="text-xs font-extrabold text-indigo-950 uppercase tracking-wide">Código de Etiqueta (Previsualización)</h4>
+              <Badge>normativa backend</Badge>
+            </div>
+            <p className="text-[11px] text-indigo-900/80 mt-1 font-medium">
+              Base Etiqueta: <code className="font-mono bg-white px-1.5 py-0.5 rounded border border-indigo-200 text-indigo-900 font-bold">(Precio Compra + Gastos + Factor 1) × (1 + %Comisión) = ${fmt(valorEtiquetaBase)}</code>
+            </p>
+          </div>
+          <div className="bg-white border border-indigo-200 rounded-xl px-4 py-2 text-center shadow-xs min-w-[170px]">
+            <span className="text-[10px] uppercase tracking-wider font-bold text-indigo-500 block">Etiqueta Producto</span>
+            <span className="text-xl font-mono font-black text-indigo-950 tracking-tight">
+              <CodigoPretty codigo={codigoEtiquetaProyectado} />
+            </span>
+          </div>
         </div>
 
-        <div className="sm:col-span-1">
-          <label className="block text-sm font-medium text-slate-700 mb-1">Precio compra</label>
-          <input
-            ref={refPrecio}
-            type="number"
-            min="0"
-            step="0.01"
-            className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
-            value={data.precio_compra}
-            onChange={(e) => { setData('precio_compra', e.target.value); setLastChanged('base'); }}
-            placeholder=""
-            required
-          />
-          {errors.precio_compra && <p className="mt-1 text-sm text-secondary-600">{errors.precio_compra}</p>}
+        {/* Fila 1: Cantidad, Fecha de Compra, Precio de Compra */}
+        <div className="grid grid-cols-1 sm:grid-cols-6 gap-3">
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Cantidad</label>
+            <input
+              ref={refCantidad}
+              type="number"
+              min="1"
+              className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500 font-semibold"
+              value={data.cantidad_compra}
+              onChange={(e) => setData('cantidad_compra', e.target.value)}
+              placeholder="1"
+              required
+            />
+            {errors.cantidad_compra && <p className="mt-1 text-xs text-secondary-600">{errors.cantidad_compra}</p>}
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Fecha de compra</label>
+            <input
+              ref={refFecha}
+              type="date"
+              className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
+              value={data.fecha_compra}
+              onChange={(e) => setData('fecha_compra', e.target.value)}
+              required
+            />
+            {errors.fecha_compra && <p className="mt-1 text-xs text-secondary-600">{errors.fecha_compra}</p>}
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Precio de Compra ($)</label>
+            <input
+              ref={refPrecio}
+              type="number"
+              min="0"
+              step="0.01"
+              className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500 font-bold text-slate-900"
+              value={data.precio_compra}
+              onChange={(e) => setData('precio_compra', e.target.value)}
+              placeholder="0.00"
+              required
+            />
+            {errors.precio_compra && <p className="mt-1 text-xs text-secondary-600">{errors.precio_compra}</p>}
+          </div>
         </div>
 
-        <div className="sm:col-span-1">
-          <label className="block text-sm font-medium text-slate-700 mb-1">Costo general (%)</label>
-          <input
-            ref={refGeneral}
-            type="number"
-            min="0"
-            step="0.01"
-            className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
-            value={data.costo_general}
-            onChange={(e) => { setData('costo_general', e.target.value); setLastChanged('base'); }}
-            placeholder=""
-            required
-          />
-          {errors.costo_general && <p className="mt-1 text-sm text-secondary-600">{errors.costo_general}</p>}
-        </div>
-
-        <div className="sm:col-span-1">
-          <label className="block text-sm font-medium text-slate-700 mb-1">Transporte (%)</label>
-          <input
-            ref={refTransporte}
-            type="number"
-            min="0"
-            step="0.01"
-            className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
-            value={data.costo_transporte}
-            onChange={(e) => { setData('costo_transporte', e.target.value); setLastChanged('base'); }}
-            placeholder=""
-            required
-          />
-          {errors.costo_transporte && <p className="mt-1 text-sm text-secondary-600">{errors.costo_transporte}</p>}
-        </div>
-
-        <div className="sm:col-span-1">
-          <label className="block text-sm font-medium text-slate-700 mb-1">% Ganancia</label>
-          <input
-            ref={refPorcentaje}
-            type="number"
-            min="0"
-            step="0.01"
-            className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
-            value={data.porcentaje_ganancia}
-            onChange={(e) => { setData('porcentaje_ganancia', e.target.value); setLastChanged('porcentaje'); }}
-            placeholder=""
-            required
-          />
-          {errors.porcentaje_ganancia && <p className="mt-1 text-sm text-secondary-600">{errors.porcentaje_ganancia}</p>}
-        </div>
-
-        <div className="sm:col-span-2">
-          <label className="block text-sm font-medium text-slate-700 mb-1">Precio final (unit.)</label>
-          <input
-            ref={refFinal}
-            type="number"
-            min="0"
-            step="0.01"
-            className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
-            value={data.precio_compra_final}
-            onChange={(e) => { setData('precio_compra_final', e.target.value); setLastChanged('final'); }}
-            placeholder=""
-            required
-          />
-          {errors.precio_compra_final && <p className="mt-1 text-sm text-secondary-600">{errors.precio_compra_final}</p>}
-        </div>
-
-        <div className="sm:col-span-4">
-          <div className="rounded-md bg-slate-50 border border-slate-200 p-3">
-            <div className="text-xs text-slate-500">Precio total (calculado):</div>
-            <div className="text-lg font-semibold text-slate-900">$ {fmt(precioTotal)}</div>
-            <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-600">
-              <div>
-                <div>Precio unit.: <b>$ {fmt(precioUnitario)}</b></div>
-                <div>Costo general unit.: <b>$ {fmt(addGeneralUnit)}</b> ({fmt(pctGeneral)}%)</div>
-              </div>
-              <div>
-                <div>Transporte unit.: <b>$ {fmt(addTranspUnit)}</b> ({fmt(pctTransp)}%)</div>
-                <div>Base unit. (con %): <b>$ {fmt(baseUnit)}</b></div>
-              </div>
-              <div>
-                <div>% Ganancia: <b>{data.porcentaje_ganancia || '—'}%</b></div>
-                <div>Final unit.: <b>$ {fmt(data.precio_compra_final || 0)}</b></div>
+        {/* Fila 2: Gastos y Factor 1 */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* GASTOS */}
+          <div className="rounded-xl bg-white border border-slate-200 p-3.5 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 grid place-items-center text-[10px]">1</span>
+                Gastos
+              </label>
+              <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-bold">
+                <button
+                  type="button"
+                  onClick={() => setGastosModo('pct')}
+                  className={`px-2.5 py-0.5 rounded-md transition ${gastosModo === 'pct' ? 'bg-primary-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                >
+                  %
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGastosModo('val')}
+                  className={`px-2.5 py-0.5 rounded-md transition ${gastosModo === 'val' ? 'bg-primary-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                >
+                  $
+                </button>
               </div>
             </div>
+            <div className="relative">
+              <input
+                ref={refGastos}
+                type="number"
+                min="0"
+                step="0.01"
+                className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500 text-sm font-semibold pr-8"
+                value={gastosVal}
+                onChange={(e) => setGastosVal(e.target.value)}
+                placeholder="0.00"
+              />
+              <span className="absolute right-3 top-2 text-xs font-bold text-slate-400">
+                {gastosModo === 'pct' ? '%' : '$'}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-slate-600 pt-1 border-t border-slate-100">
+              <span>Monto: <b className="text-slate-800">+${fmt(gastosMonto)}</b></span>
+              <span className="font-semibold text-emerald-700">Costo Total Prod.: <b>${fmt(costoTotalProducto)}</b></span>
+            </div>
+          </div>
+
+          {/* FACTOR 1 */}
+          <div className="rounded-xl bg-white border border-slate-200 p-3.5 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 grid place-items-center text-[10px]">2</span>
+                Factor 1
+              </label>
+              <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-bold">
+                <button
+                  type="button"
+                  onClick={() => setFactor1Modo('pct')}
+                  className={`px-2.5 py-0.5 rounded-md transition ${factor1Modo === 'pct' ? 'bg-primary-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                >
+                  %
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFactor1Modo('val')}
+                  className={`px-2.5 py-0.5 rounded-md transition ${factor1Modo === 'val' ? 'bg-primary-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                >
+                  $
+                </button>
+              </div>
+            </div>
+            <div className="relative">
+              <input
+                ref={refFactor1}
+                type="number"
+                min="0"
+                step="0.01"
+                className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500 text-sm font-semibold pr-8"
+                value={factor1Val}
+                onChange={(e) => setFactor1Val(e.target.value)}
+                placeholder="0.00"
+              />
+              <span className="absolute right-3 top-2 text-xs font-bold text-slate-400">
+                {factor1Modo === 'pct' ? '%' : '$'}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-slate-600 pt-1 border-t border-slate-100">
+              <span>Monto: <b className="text-slate-800">+${fmt(factor1Monto)}</b></span>
+              <span className="font-semibold text-emerald-700">Subtotal 1: <b>${fmt(subtotal1)}</b></span>
+            </div>
+          </div>
+        </div>
+
+        {/* Fila 3: Ganancia y Factor 2 */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* GANANCIA */}
+          <div className="rounded-xl bg-white border border-slate-200 p-3.5 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 grid place-items-center text-[10px]">3</span>
+                Ganancia (%)
+              </label>
+              <span className="inline-flex rounded-lg bg-emerald-50 px-2 py-0.5 text-xs font-extrabold text-emerald-700 border border-emerald-200">
+                % Margen Comercial
+              </span>
+            </div>
+            <div className="relative">
+              <input
+                ref={refGanancia}
+                type="number"
+                min="0"
+                max="99.99"
+                step="0.01"
+                className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500 text-sm font-semibold pr-8"
+                value={gananciaVal}
+                onChange={(e) => setGananciaVal(e.target.value)}
+                placeholder="0.00"
+              />
+              <span className="absolute right-3 top-2 text-xs font-bold text-slate-400">
+                %
+              </span>
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-slate-600 pt-1 border-t border-slate-100">
+              <span>Monto: <b className="text-slate-800">+${fmt(gananciaMonto)}</b></span>
+              <span className="font-semibold text-emerald-700">Subtotal 2: <b>${fmt(subtotal2)}</b></span>
+            </div>
+            <p className="text-[10px] text-slate-400 mt-1 font-medium">Fórmula: Subtotal 1 / (1 - %Ganancia)</p>
+          </div>
+
+          {/* COMISIÓN (%) */}
+          <div className="rounded-xl bg-white border border-slate-200 p-3.5 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-slate-100 text-slate-700 grid place-items-center text-[10px]">4</span>
+                Comisión (%)
+              </label>
+              <span className="inline-flex rounded-lg bg-sky-50 px-2 py-0.5 text-xs font-extrabold text-sky-700 border border-sky-200">
+                % Comisión
+              </span>
+            </div>
+            <div className="relative">
+              <input
+                ref={refFactor2}
+                type="number"
+                min="0"
+                step="0.01"
+                className="w-full rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500 text-sm font-semibold pr-8"
+                value={factor2Val}
+                onChange={(e) => setFactor2Val(e.target.value)}
+                placeholder="Ej. 5"
+              />
+              <span className="absolute right-3 top-2 text-xs font-bold text-slate-400">
+                %
+              </span>
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-slate-600 pt-1 border-t border-slate-100">
+              <span>Monto Comisión: <b className="text-slate-800">+${fmt(factor2Monto)}</b></span>
+              <span className="font-semibold text-emerald-700">PVP Calculado: <b>${fmt(pvpCalculado)}</b></span>
+            </div>
+          </div>
+        </div>
+
+        {/* Fila 4: PVP Final Unitario & Total Compra */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-slate-200">
+          <div>
+            <label className="block text-xs font-bold text-slate-900 mb-1 uppercase tracking-wide">PVP Final Unitario ($)</label>
+            <input
+              ref={refFinal}
+              type="number"
+              min="0"
+              step="0.01"
+              className="w-full rounded-xl border-2 border-emerald-600 bg-white px-3 py-2 text-xl font-black text-emerald-800 shadow-sm focus:border-emerald-700 focus:ring-emerald-700"
+              value={data.precio_compra_final}
+              onChange={handleFinalChange}
+              placeholder="0.00"
+              required
+            />
+            {errors.precio_compra_final && <p className="mt-1 text-xs text-secondary-600">{errors.precio_compra_final}</p>}
+          </div>
+
+          <div className="rounded-xl bg-gradient-to-r from-emerald-950 to-slate-950 text-white p-4 flex flex-col justify-center shadow-lg border border-emerald-900/30">
+            <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wider">Total Inversión / Compra</span>
+            <div className="text-2xl font-black text-white">${fmt((cantNum > 0 ? cantNum : 1) * Number(data.precio_compra_final || pvpCalculado))}</div>
+            <span className="text-[11px] text-emerald-300 font-medium mt-0.5">
+              {cantNum || 1} {cantNum === 1 ? 'unidad' : 'unidades'} x ${fmt(data.precio_compra_final || pvpCalculado)} c/u
+            </span>
           </div>
         </div>
       </div>
@@ -655,7 +898,7 @@ export default function LoteForm({
         <button
           type="button"
           onClick={onCancel}
-          className="px-3 py-2 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+          className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
         >
           Cancelar
         </button>
@@ -663,8 +906,8 @@ export default function LoteForm({
           type="submit"
           disabled={processing}
           className={[
-            'px-3 py-2 rounded-md text-white',
-            processing ? 'bg-primary-400 cursor-not-allowed' : 'bg-primary-600 hover:bg-primary-700'
+            'px-5 py-2.5 rounded-xl text-sm font-bold text-white shadow-md transition',
+            processing ? 'bg-emerald-400 cursor-not-allowed' : 'bg-emerald-700 hover:bg-emerald-800 hover:shadow-lg'
           ].join(' ')}
         >
           {isEdit ? 'Guardar cambios' : 'Registrar compra'}

@@ -13,6 +13,108 @@ use Illuminate\Support\Facades\Log;
 class SriFacturaService
 {
     /**
+     * RUC del Proveedor del Sistema Informático (Resolución SRI Nro. NAC-DGERCGC26-00000027)
+     * Reemplaza '1790000000001' con tu RUC de dueño/proveedor del sistema informático.
+     */
+    public const RUC_PROVEEDOR = '1722050935001';
+
+    /**
+     * Valida si el XML contiene el campo obligatorio "RUC Proveedor" en <infoAdicional>.
+     * Si no existe (por ejemplo, si el XML ya se generó previamente sin el campo), lo agrega automáticamente.
+     */
+    public static function asegurarRucProveedorEnXml(string $xmlContent): string
+    {
+        if (empty(trim($xmlContent))) {
+            return $xmlContent;
+        }
+
+        // Si ya contiene el campo "RUC Proveedor" con un valor, retornarlo directamente
+        if (preg_match('/<campoAdicional[^>]*nombre=["\']RUC Proveedor["\'][^>]*>\s*([0-9A-Za-z]+)\s*<\/campoAdicional>/i', $xmlContent)) {
+            return $xmlContent;
+        }
+
+        $doc = new \DOMDocument('1.0', 'UTF-8');
+        $doc->preserveWhiteSpace = false;
+        $doc->formatOutput = false;
+
+        $prevErr = libxml_use_internal_errors(true);
+        $loaded = $doc->loadXML($xmlContent);
+        libxml_clear_errors();
+        libxml_use_internal_errors($prevErr);
+
+        if (!$loaded || !$doc->documentElement) {
+            return $xmlContent;
+        }
+
+        $root = $doc->documentElement;
+
+        // 1. Buscar o crear nodo <infoAdicional>
+        $infoAdicionalNodes = $root->getElementsByTagName('infoAdicional');
+        if ($infoAdicionalNodes->length > 0) {
+            $infoAdicional = $infoAdicionalNodes->item(0);
+        } else {
+            $infoAdicional = $doc->createElement('infoAdicional');
+            // En el estándar SRI, infoAdicional va antes de la firma digital ds:Signature si existe
+            $signature = $root->getElementsByTagNameNS('http://www.w3.org/2000/09/xmldsig#', 'Signature')->item(0)
+                ?? $root->getElementsByTagName('Signature')->item(0);
+
+            if ($signature) {
+                $root->insertBefore($infoAdicional, $signature);
+            } else {
+                $root->appendChild($infoAdicional);
+            }
+        }
+
+        // 2. Verificar si existe campoAdicional con nombre "RUC Proveedor"
+        $campoExistente = null;
+        foreach ($infoAdicional->getElementsByTagName('campoAdicional') as $campo) {
+            if (strcasecmp(trim($campo->getAttribute('nombre')), 'RUC Proveedor') === 0) {
+                $campoExistente = $campo;
+                break;
+            }
+        }
+
+        if ($campoExistente) {
+            if (empty(trim($campoExistente->textContent))) {
+                $campoExistente->textContent = self::RUC_PROVEEDOR;
+            }
+        } else {
+            $campoRuc = $doc->createElement('campoAdicional', self::RUC_PROVEEDOR);
+            $campoRuc->setAttribute('nombre', 'RUC Proveedor');
+            if ($infoAdicional->firstChild) {
+                $infoAdicional->insertBefore($campoRuc, $infoAdicional->firstChild);
+            } else {
+                $infoAdicional->appendChild($campoRuc);
+            }
+        }
+
+        return $doc->saveXML();
+    }
+
+    /**
+     * Valida y actualiza un archivo XML en disco para asegurar que contenga el campo "RUC Proveedor".
+     */
+    public static function asegurarRucProveedorEnArchivoXml(string $filePath): bool
+    {
+        if (!is_file($filePath)) {
+            return false;
+        }
+
+        $content = file_get_contents($filePath);
+        if ($content === false || empty(trim($content))) {
+            return false;
+        }
+
+        $nuevoXml = self::asegurarRucProveedorEnXml($content);
+        if ($nuevoXml !== $content) {
+            file_put_contents($filePath, $nuevoXml);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Genera la cadena XML para la Factura (esquema 1.1.0 SRI)
      */
     public function generarFacturaXMLString(Venta $venta, array $cfg): string
@@ -180,6 +282,11 @@ class SriFacturaService
         $infoAdicional = $doc->createElement('infoAdicional');
         $factura->appendChild($infoAdicional);
 
+        // Requisito obligatorio SRI: RUC del Proveedor de Sistemas (Resolución NAC-DGERCGC26-00000027)
+        $campoRucProv = $doc->createElement('campoAdicional', self::RUC_PROVEEDOR);
+        $campoRucProv->setAttribute('nombre', 'RUC Proveedor');
+        $infoAdicional->appendChild($campoRucProv);
+
         if (!empty($cliente?->correo)) {
             $campoEmail = $doc->createElement('campoAdicional', htmlspecialchars((string)$cliente->correo, ENT_QUOTES, 'UTF-8'));
             $campoEmail->setAttribute('nombre', 'Email');
@@ -200,6 +307,16 @@ class SriFacturaService
      */
     public function procesarFacturaSRI(Venta $venta, array $empresaInfo, array $stockMov): array
     {
+        // -1. Validación previa exhaustiva de los datos antes de consumir el WebService del SRI
+        $errorValidacion = $this->validarDatosParaSri($venta, $empresaInfo);
+        if ($errorValidacion !== null) {
+            $this->revertirStockSiCorresponde($stockMov);
+            return [
+                'success' => false,
+                'message' => 'Validación previa SRI: ' . $errorValidacion
+            ];
+        }
+
         $ambiente = (int)($empresaInfo['ambiente'] ?? 1);
 
         // Endpoints SRI según el ambiente configurado en la empresa:
@@ -216,7 +333,9 @@ class SriFacturaService
         Log::info("SRI Factura -> Ambiente: {$ambiente} " . ($ambiente === 2 ? '(PRODUCCIÓN)' : '(PRUEBAS)') . " | Recepción: {$webRecepcion}");
 
         // 0. Si el comprobante NO está AUTORIZADO, actualizar siempre a la configuración vigente de la empresa (estab, pto_emision, fecha y claveAcceso de 49 dígitos)
-        if (strtoupper((string)($venta->sri_estado_autorizacion ?? '')) !== 'AUTORIZADO') {
+        $estadoActual = strtoupper(trim((string)($venta->estado ?? '')));
+        $estadoSri    = strtoupper(trim((string)($venta->sri_estado_autorizacion ?? '')));
+        if ($estadoActual !== 'AUTORIZADO' && $estadoSri !== 'AUTORIZADO') {
             $empEstab  = !empty($empresaInfo['establecimiento']) ? str_pad((string)$empresaInfo['establecimiento'], 3, '0', STR_PAD_LEFT) : '001';
             $empPtoEmi = !empty($empresaInfo['punto_emision']) ? str_pad((string)$empresaInfo['punto_emision'], 3, '0', STR_PAD_LEFT) : '001';
 
@@ -247,77 +366,141 @@ class SriFacturaService
             $venta->save();
         }
 
-        // 1. Generar XML String
-        $venta->load(['cliente']);
-        $xmlString = $this->generarFacturaXMLString($venta, [
-            'razonSocial'        => $empresaInfo['razon_social'] ?? ($empresaInfo['nombre_comercial'] ?? 'Mundo Navideño 365'),
-            'nombreComercial'    => $empresaInfo['nombre_comercial'] ?? ($empresaInfo['razon_social'] ?? 'Mundo Navideño 365'),
-            'ruc'                => $empresaInfo['ruc'] ?? '1790000000001',
-            'dirMatriz'          => $empresaInfo['direccion'] ?? '',
-            'dirEstablecimiento' => $empresaInfo['direccion'] ?? '',
-            'ambiente'           => $ambiente,
-        ]);
+        // Loop de emisión y recepción con auto-recuperación de Error 45 (Secuencial Registrado)
+        $maxIntentosSec = 5;
+        $intentoSec = 0;
+        $resRecep = null;
+        $tempXmlPath = null;
+        $tempRecepPath = null;
 
-        // 2. Firmar XML
-        $pathCertificateDb = $empresaInfo['ruta_firma_electronica'] ?? '';
-        $rawPath = storage_path('app/' . $pathCertificateDb);
-        if (!file_exists($rawPath)) {
-            $this->revertirStockSiCorresponde($stockMov);
-            return [
-                'success' => false,
-                'message' => 'Archivo de firma electrónica no encontrado en: ' . $rawPath
-            ];
-        }
+        while ($intentoSec < $maxIntentosSec) {
+            $intentoSec++;
 
-        $pathCertificate = 'file://' . realpath($rawPath);
-        $sriSigner = new SignDOcumentToSRI(
-            'factura',
-            $pathCertificate,
-            $empresaInfo['clave_firma_electronica'] ?? '',
-            $xmlString,
-            SignDOcumentToSRI::ALGO_SHA1,
-            null
-        );
+            // 1. Generar XML String
+            $venta->load(['cliente']);
+            $xmlString = $this->generarFacturaXMLString($venta, [
+                'razonSocial'        => $empresaInfo['razon_social'] ?? ($empresaInfo['nombre_comercial'] ?? 'Mundo Navideño 365'),
+                'nombreComercial'    => $empresaInfo['nombre_comercial'] ?? ($empresaInfo['razon_social'] ?? 'Mundo Navideño 365'),
+                'ruc'                => $empresaInfo['ruc'] ?? '1790000000001',
+                'dirMatriz'          => $empresaInfo['direccion'] ?? '',
+                'dirEstablecimiento' => $empresaInfo['direccion'] ?? '',
+                'ambiente'           => $ambiente,
+            ]);
 
-        $xmlFirmado = $sriSigner->xml;
-        $tempDir = storage_path('app/sri/xml/');
-        if (!is_dir($tempDir)) {
-            mkdir($tempDir, 0777, true);
-        }
+            // Validar que exista el campo obligatorio RUC Proveedor (si ya se generó o refactura)
+            $xmlString = self::asegurarRucProveedorEnXml($xmlString);
 
-        $tempXmlPath = $tempDir . $venta->autorizacion . '.xml';
-        $tempRecepPath = $tempDir . $venta->autorizacion . '_recep.xml';
-        file_put_contents($tempXmlPath, $xmlFirmado);
+            // Si ya existía un XML previo guardado en disco, validarlo y actualizarlo
+            if (!empty($venta->sri_xml_path)) {
+                $pathAprob = storage_path('app/public/' . $venta->sri_xml_path);
+                if (is_file($pathAprob)) {
+                    self::asegurarRucProveedorEnArchivoXml($pathAprob);
+                }
+            }
 
-        $venta->estado = 'Firmada';
-        $venta->save();
-
-        // 3. Enviar a Recepción SRI
-        try {
-            $resRecep = $this->peticionRecepcionSRI($webRecepcion, $xmlFirmado);
-
-            if (in_array($resRecep['estado'], ['DEVUELTA', 'NO AUTORIZADO'], true)) {
-                $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
+            // 2. Firmar XML
+            $pathCertificateDb = $empresaInfo['ruta_firma_electronica'] ?? '';
+            $rawPath = storage_path('app/' . $pathCertificateDb);
+            if (!file_exists($rawPath)) {
                 $this->revertirStockSiCorresponde($stockMov);
-
-                $venta->estado = 'Devuelta';
-                $venta->save();
-
                 return [
                     'success' => false,
-                    'message' => 'El comprobante fue devuelto por el SRI: ' . $resRecep['mensaje']
+                    'message' => 'Archivo de firma electrónica no encontrado en: ' . $rawPath
                 ];
             }
-        } catch (\Throwable $e) {
-            $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
-            $this->revertirStockSiCorresponde($stockMov);
-            return [
-                'success' => false,
-                'message' => 'Error de conexión en Recepción SRI: ' . $e->getMessage()
-            ];
+
+            $pathCertificate = 'file://' . realpath($rawPath);
+            $sriSigner = new SignDOcumentToSRI(
+                'factura',
+                $pathCertificate,
+                $empresaInfo['clave_firma_electronica'] ?? '',
+                $xmlString,
+                SignDOcumentToSRI::ALGO_SHA1,
+                null
+            );
+
+            $xmlFirmado = $sriSigner->xml;
+            $tempDir = storage_path('app/sri/xml/');
+            if (!is_dir($tempDir)) {
+                mkdir($tempDir, 0777, true);
+            }
+
+            $tempXmlPath = $tempDir . $venta->autorizacion . '.xml';
+            $tempRecepPath = $tempDir . $venta->autorizacion . '_recep.xml';
+            file_put_contents($tempXmlPath, $xmlFirmado);
+
+            $venta->estado = 'Firmada';
+            $venta->save();
+
+            // 3. Enviar a Recepción SRI
+            try {
+                $resRecep = $this->peticionRecepcionSRI($webRecepcion, $xmlFirmado);
+
+                // Auto-recuperación ante Error 45: SECUENCIAL REGISTRADO
+                $msgRecepUpper = strtoupper((string)($resRecep['mensaje'] ?? ''));
+                $esSecuencialRegistrado = in_array($resRecep['estado'], ['DEVUELTA', 'NO AUTORIZADO'], true)
+                    && (str_contains($msgRecepUpper, 'SECUENCIAL REGISTRADO') || str_contains($msgRecepUpper, '45ERROR') || str_contains($msgRecepUpper, 'ERROR 45'));
+
+                if ($esSecuencialRegistrado && $intentoSec < $maxIntentosSec) {
+                    \Illuminate\Support\Facades\Log::warning("Secuencial {$venta->secuencial} ya registrado en el SRI (Error 45). Incrementando automáticamente y reintentando (Intento {$intentoSec}/{$maxIntentosSec})...");
+
+                    $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
+
+                    // Calcular nuevo secuencial
+                    $actualInt = (int)$venta->secuencial;
+                    $nuevoInt = $actualInt + 1;
+                    $nuevoSec = str_pad((string)$nuevoInt, 9, '0', STR_PAD_LEFT);
+
+                    // Sincronizar tabla empresas para que futuras ventas no choquen con este secuencial
+                    DB::table('empresas')->update([
+                        'secuencial_factura' => DB::raw("GREATEST(COALESCE(secuencial_factura, 1), " . ($nuevoInt + 1) . ")")
+                    ]);
+
+                    $fechaEmisionObj = \Carbon\Carbon::now();
+                    $venta->fecha = $fechaEmisionObj->toDateTimeString();
+                    $venta->secuencial = $nuevoSec;
+                    $venta->numero = $venta->estab . '-' . $venta->pto_emision . '-' . $nuevoSec;
+                    $venta->autorizacion = $this->generarClaveAcceso(
+                        $fechaEmisionObj,
+                        $empresaInfo['ruc'] ?? '1790000000001',
+                        (string)($empresaInfo['ambiente'] ?? '1'),
+                        $venta->estab,
+                        $venta->pto_emision,
+                        $venta->secuencial,
+                        '01'
+                    );
+                    $venta->save();
+                    continue;
+                }
+
+                if (in_array($resRecep['estado'], ['DEVUELTA', 'NO AUTORIZADO'], true)) {
+                    $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
+                    $this->revertirStockSiCorresponde($stockMov);
+
+                    $venta->estado = 'Devuelta';
+                    $venta->save();
+
+                    return [
+                        'success' => false,
+                        'message' => 'El comprobante fue devuelto por el SRI: ' . $resRecep['mensaje']
+                    ];
+                }
+
+                // Recepción exitosa
+                break;
+
+            } catch (\Throwable $e) {
+                $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
+                $this->revertirStockSiCorresponde($stockMov);
+                return [
+                    'success' => false,
+                    'message' => 'Error de conexión en Recepción SRI: ' . $e->getMessage()
+                ];
+            }
         }
 
-        // 4. Consultar Autorización SRI
+        // 4. Consultar Autorización SRI (esperar 2 segundos para dar tiempo al procesamiento asíncrono del SRI)
+        sleep(2);
         try {
             $resAut = $this->peticionAutorizacionSRI($webAutoriza, $venta->autorizacion);
 
@@ -349,6 +532,12 @@ class SriFacturaService
                 $venta->sri_xml_path = 'facturas/aprobados/FC' . $venta->estab . '-' . $venta->pto_emision . '-' . $venta->secuencial . '.xml';
             }
             $venta->save();
+
+            // Sincronizar secuencial en empresas para que futuras ventas no reutilicen números
+            $nextFree = ((int)$venta->secuencial) + 1;
+            DB::table('empresas')->update([
+                'secuencial_factura' => DB::raw("GREATEST(COALESCE(secuencial_factura, 1), {$nextFree})")
+            ]);
 
             // Enviar comprobante por correo únicamente cuando está AUTORIZADO por el SRI
             $correoEnviado = $this->enviarComprobantePorCorreo($venta, $empresaInfo, 'Factura', $nombreArchivoAprobado);
@@ -602,6 +791,26 @@ class SriFacturaService
             $detNode->appendChild($det);
         }
 
+        /* ========== infoAdicional ========== */
+        $infoAdicional = $doc->createElement('infoAdicional');
+        $root->appendChild($infoAdicional);
+
+        // Requisito obligatorio SRI: RUC del Proveedor de Sistemas (Resolución NAC-DGERCGC26-00000027)
+        $campoRucProv = $doc->createElement('campoAdicional', self::RUC_PROVEEDOR);
+        $campoRucProv->setAttribute('nombre', 'RUC Proveedor');
+        $infoAdicional->appendChild($campoRucProv);
+
+        if (!empty($cliente?->correo)) {
+            $campoEmail = $doc->createElement('campoAdicional', htmlspecialchars((string)$cliente->correo, ENT_QUOTES, 'UTF-8'));
+            $campoEmail->setAttribute('nombre', 'Email');
+            $infoAdicional->appendChild($campoEmail);
+        }
+        if (!empty($cliente?->telefono)) {
+            $campoTel = $doc->createElement('campoAdicional', htmlspecialchars((string)$cliente->telefono, ENT_QUOTES, 'UTF-8'));
+            $campoTel->setAttribute('nombre', 'Telefono');
+            $infoAdicional->appendChild($campoTel);
+        }
+
         return $doc->saveXML();
     }
 
@@ -658,74 +867,128 @@ class SriFacturaService
             $nc->save();
         }
 
-        // 1. Generar XML String
-        $nc->load(['venta', 'cliente']);
-        $xmlString = $this->generarNotaCreditoXMLString($nc, [
-            'razonSocial'        => $empresaInfo['razon_social'] ?? ($empresaInfo['nombre_comercial'] ?? 'Mundo Navideño 365'),
-            'nombreComercial'    => $empresaInfo['nombre_comercial'] ?? ($empresaInfo['razon_social'] ?? 'Mundo Navideño 365'),
-            'ruc'                => $empresaInfo['ruc'] ?? '1790000000001',
-            'dirMatriz'          => $empresaInfo['direccion'] ?? '',
-            'dirEstablecimiento' => $empresaInfo['direccion'] ?? '',
-            'ambiente'           => $ambiente,
-        ]);
+        // Loop de emisión y recepción con auto-recuperación de Error 45 (Secuencial Registrado) para NC
+        $maxIntentosSec = 5;
+        $intentoSec = 0;
+        $resRecep = null;
+        $tempXmlPath = null;
+        $tempRecepPath = null;
 
-        // 2. Firmar XML
-        $pathCertificateDb = $empresaInfo['ruta_firma_electronica'] ?? '';
-        $rawPath = storage_path('app/' . $pathCertificateDb);
-        if (!file_exists($rawPath)) {
-            return [
-                'success' => false,
-                'message' => 'Archivo de firma electrónica no encontrado en: ' . $rawPath
-            ];
-        }
+        while ($intentoSec < $maxIntentosSec) {
+            $intentoSec++;
 
-        $pathCertificate = 'file://' . realpath($rawPath);
-        $sriSigner = new SignDOcumentToSRI(
-            'notaCredito',
-            $pathCertificate,
-            $empresaInfo['clave_firma_electronica'] ?? '',
-            $xmlString,
-            SignDOcumentToSRI::ALGO_SHA1,
-            null
-        );
+            // 1. Generar XML String
+            $nc->load(['venta', 'cliente']);
+            $xmlString = $this->generarNotaCreditoXMLString($nc, [
+                'razonSocial'        => $empresaInfo['razon_social'] ?? ($empresaInfo['nombre_comercial'] ?? 'Mundo Navideño 365'),
+                'nombreComercial'    => $empresaInfo['nombre_comercial'] ?? ($empresaInfo['razon_social'] ?? 'Mundo Navideño 365'),
+                'ruc'                => $empresaInfo['ruc'] ?? '1790000000001',
+                'dirMatriz'          => $empresaInfo['direccion'] ?? '',
+                'dirEstablecimiento' => $empresaInfo['direccion'] ?? '',
+                'ambiente'           => $ambiente,
+            ]);
 
-        $xmlFirmado = $sriSigner->xml;
-        $tempDir = storage_path('app/sri/xml/');
-        if (!is_dir($tempDir)) {
-            mkdir($tempDir, 0777, true);
-        }
+            // Validar que exista el campo obligatorio RUC Proveedor
+            $xmlString = self::asegurarRucProveedorEnXml($xmlString);
 
-        $tempXmlPath = $tempDir . $nc->autorizacion . '.xml';
-        $tempRecepPath = $tempDir . $nc->autorizacion . '_recep.xml';
-        file_put_contents($tempXmlPath, $xmlFirmado);
-
-        $nc->estado = 'Firmada';
-        $nc->save();
-
-        // 3. Enviar a Recepción SRI
-        try {
-            $resRecep = $this->peticionRecepcionSRI($webRecepcion, $xmlFirmado);
-
-            if (in_array($resRecep['estado'], ['DEVUELTA', 'NO AUTORIZADO'], true)) {
-                $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
-
-                $nc->estado = 'Devuelta';
-                $nc->save();
-
+            // 2. Firmar XML
+            $pathCertificateDb = $empresaInfo['ruta_firma_electronica'] ?? '';
+            $rawPath = storage_path('app/' . $pathCertificateDb);
+            if (!file_exists($rawPath)) {
                 return [
                     'success' => false,
-                    'message' => 'La nota de crédito fue devuelta por el SRI: ' . $resRecep['mensaje']
+                    'message' => 'Archivo de firma electrónica no encontrado en: ' . $rawPath
                 ];
             }
-        } catch (\Throwable $e) {
-            $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
-            return [
-                'success' => false,
-                'message' => 'Error de conexión en Recepción SRI: ' . $e->getMessage()
-            ];
+
+            $pathCertificate = 'file://' . realpath($rawPath);
+            $sriSigner = new SignDOcumentToSRI(
+                'notaCredito',
+                $pathCertificate,
+                $empresaInfo['clave_firma_electronica'] ?? '',
+                $xmlString,
+                SignDOcumentToSRI::ALGO_SHA1,
+                null
+            );
+
+            $xmlFirmado = $sriSigner->xml;
+            $tempDir = storage_path('app/sri/xml/');
+            if (!is_dir($tempDir)) {
+                mkdir($tempDir, 0777, true);
+            }
+
+            $tempXmlPath = $tempDir . $nc->autorizacion . '.xml';
+            $tempRecepPath = $tempDir . $nc->autorizacion . '_recep.xml';
+            file_put_contents($tempXmlPath, $xmlFirmado);
+
+            $nc->estado = 'Firmada';
+            $nc->save();
+
+            // 3. Enviar a Recepción SRI
+            try {
+                $resRecep = $this->peticionRecepcionSRI($webRecepcion, $xmlFirmado);
+
+                // Auto-recuperación ante Error 45: SECUENCIAL REGISTRADO
+                $msgRecepUpper = strtoupper((string)($resRecep['mensaje'] ?? ''));
+                $esSecuencialRegistrado = in_array($resRecep['estado'], ['DEVUELTA', 'NO AUTORIZADO'], true)
+                    && (str_contains($msgRecepUpper, 'SECUENCIAL REGISTRADO') || str_contains($msgRecepUpper, '45ERROR') || str_contains($msgRecepUpper, 'ERROR 45'));
+
+                if ($esSecuencialRegistrado && $intentoSec < $maxIntentosSec) {
+                    \Illuminate\Support\Facades\Log::warning("Secuencial NC {$nc->secuencial} ya registrado en el SRI (Error 45). Incrementando automáticamente y reintentando (Intento {$intentoSec}/{$maxIntentosSec})...");
+
+                    $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
+
+                    $actualInt = (int)$nc->secuencial;
+                    $nuevoInt = $actualInt + 1;
+                    $nuevoSec = str_pad((string)$nuevoInt, 9, '0', STR_PAD_LEFT);
+
+                    DB::table('empresas')->update([
+                        'secuencial_nota_credito' => DB::raw("GREATEST(COALESCE(secuencial_nota_credito, 1), " . ($nuevoInt + 1) . ")")
+                    ]);
+
+                    $fechaEmisionObj = \Carbon\Carbon::now();
+                    $nc->fecha = $fechaEmisionObj->toDateTimeString();
+                    $nc->secuencial = $nuevoSec;
+                    $nc->numero = $nc->estab . '-' . $nc->pto_emision . '-' . $nuevoSec;
+                    $nc->autorizacion = $this->generarClaveAcceso(
+                        $fechaEmisionObj,
+                        $empresaInfo['ruc'] ?? '1790000000001',
+                        (string)($empresaInfo['ambiente'] ?? '1'),
+                        $nc->estab,
+                        $nc->pto_emision,
+                        $nc->secuencial,
+                        '04'
+                    );
+                    $nc->save();
+                    continue;
+                }
+
+                if (in_array($resRecep['estado'], ['DEVUELTA', 'NO AUTORIZADO'], true)) {
+                    $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
+
+                    $nc->estado = 'Devuelta';
+                    $nc->save();
+
+                    return [
+                        'success' => false,
+                        'message' => 'La nota de crédito fue devuelta por el SRI: ' . $resRecep['mensaje']
+                    ];
+                }
+
+                // Recepción exitosa
+                break;
+
+            } catch (\Throwable $e) {
+                $this->limpiarArchivosTemporales([$tempXmlPath, $tempRecepPath]);
+                return [
+                    'success' => false,
+                    'message' => 'Error de conexión en Recepción SRI: ' . $e->getMessage()
+                ];
+            }
         }
 
-        // 4. Consultar Autorización SRI
+        // 4. Consultar Autorización SRI (esperar 2 segundos para dar tiempo al procesamiento asíncrono del SRI)
+        sleep(2);
         try {
             $resAut = $this->peticionAutorizacionSRI($webAutoriza, $nc->autorizacion);
 
@@ -767,6 +1030,12 @@ class SriFacturaService
             $nc->estado = 'AUTORIZADO';
             $nc->save();
 
+            // Sincronizar secuencial en empresas para que futuras notas de crédito no reutilicen números
+            $nextFreeNC = ((int)$nc->secuencial) + 1;
+            DB::table('empresas')->update([
+                'secuencial_nota_credito' => DB::raw("GREATEST(COALESCE(secuencial_nota_credito, 1), {$nextFreeNC})")
+            ]);
+
             // Enviar comprobante por correo únicamente cuando está AUTORIZADO por el SRI
             $correoEnviado = $this->enviarComprobantePorCorreo($nc, $empresaInfo, 'Nota de Crédito', $nombreArchivoAprobado);
             $msgMail = $correoEnviado ? ' y enviada por correo al cliente.' : '.';
@@ -787,6 +1056,91 @@ class SriFacturaService
                 'message' => 'Error de conexión en Autorización SRI: ' . $e->getMessage()
             ];
         }
+    }
+
+    /**
+     * Valida que todos los datos de empresa, cliente y productos cumplan con los requisitos del SRI.
+     * Retorna null si todos los datos son válidos, o una cadena con la descripción del error detectado.
+     */
+    public function validarDatosParaSri(Venta $venta, array $empresaInfo): ?string
+    {
+        // 1. Validar Empresa
+        $ruc = preg_replace('/\D/', '', (string)($empresaInfo['ruc'] ?? ''));
+        if (strlen($ruc) !== 13) {
+            return "El RUC de la empresa emisora es inválido o no tiene 13 dígitos ({$ruc}).";
+        }
+
+        $razonSocial = trim((string)($empresaInfo['razon_social'] ?? ($empresaInfo['nombre_comercial'] ?? '')));
+        if ($razonSocial === '') {
+            return "La empresa no tiene configurada una Razón Social o Nombre Comercial en la configuración.";
+        }
+
+        $dirMatriz = trim((string)($empresaInfo['direccion'] ?? ''));
+        if ($dirMatriz === '') {
+            return "La empresa no tiene configurada la Dirección Matriz.";
+        }
+
+        $estab  = !empty($empresaInfo['establecimiento']) ? str_pad((string)$empresaInfo['establecimiento'], 3, '0', STR_PAD_LEFT) : '001';
+        $ptoEmi = !empty($empresaInfo['punto_emision']) ? str_pad((string)$empresaInfo['punto_emision'], 3, '0', STR_PAD_LEFT) : '001';
+        if (strlen($estab) !== 3 || strlen($ptoEmi) !== 3) {
+            return "El establecimiento ({$estab}) o punto de emisión ({$ptoEmi}) debe ser de 3 dígitos numéricos.";
+        }
+
+        // Firma electrónica
+        $pathCert = $empresaInfo['ruta_firma_electronica'] ?? '';
+        $rawPath = storage_path('app/' . $pathCert);
+        if (empty($pathCert) || !file_exists($rawPath)) {
+            return "No se encuentra el archivo de firma electrónica (.p12) en el servidor. Verifique la configuración de la empresa.";
+        }
+        if (empty($empresaInfo['clave_firma_electronica'])) {
+            return "No se ha configurado la contraseña de la firma electrónica de la empresa.";
+        }
+
+        // 2. Validar Cliente
+        $venta->loadMissing('cliente');
+        $cliente = $venta->cliente;
+        if (!$cliente) {
+            return "La venta no tiene un cliente asignado.";
+        }
+
+        $cliNombre = trim((string)($cliente->nombres ?? ($cliente->nombre_o_razon_social ?? ($cliente->nombre ?? ''))));
+        $cliIdent  = trim((string)($cliente->ci_o_ruc ?? ($cliente->identificacion ?? '')));
+
+        $esCF = $this->isConsumidorFinalId($cliIdent) || $this->isConsumidorFinalId($cliNombre);
+
+        if (!$esCF) {
+            if ($cliNombre === '') {
+                return "El cliente no tiene registrado un nombre o razón social válido.";
+            }
+
+            $cliNum = preg_replace('/\D/', '', $cliIdent);
+            if ($cliIdent === '' || $cliNum === '') {
+                return "La identificación del cliente ({$cliNombre}) está vacía.";
+            }
+
+            if (strlen($cliNum) !== 10 && strlen($cliNum) !== 13) {
+                return "La identificación del cliente ({$cliIdent}) debe tener 10 dígitos (cédula) o 13 dígitos (RUC).";
+            }
+        }
+
+        // 3. Validar Productos / Ítems
+        $venta->loadMissing('productosVendidos.producto');
+        $items = $venta->productosVendidos;
+        if ($items->isEmpty()) {
+            return "La venta no tiene productos o ítems asociados.";
+        }
+
+        foreach ($items as $idx => $it) {
+            $linea = $idx + 1;
+            if ((float)$it->cantidad <= 0) {
+                return "El producto en la línea {$linea} tiene una cantidad no válida ({$it->cantidad}).";
+            }
+            if ((float)$it->precio < 0) {
+                return "El producto en la línea {$linea} tiene un precio negativo.";
+            }
+        }
+
+        return null;
     }
 
     protected function isConsumidorFinalId(string $raw): bool
@@ -914,7 +1268,7 @@ class SriFacturaService
                     <div class='content'>
                         <div class='saludo'>Hola, {$nombreCliente}</div>
                         <div class='texto'>
-                            Le informamos que su <strong>{$tipoDoc} Electrónica N° {$numeroDoc}</strong> ha sido generada y <strong>AUTORIZADA</strong> exitosamente por el Servicio de Rentas Internas (SRI). Adjunto a este correo encontrará el archivo XML firmado.
+                            Le informamos que su <strong>{$tipoDoc} Electrónica N° {$numeroDoc}</strong> ha sido generada y <strong>AUTORIZADA</strong> exitosamente por el Servicio de Rentas Internas (SRI). Adjunto a este correo encontrará el archivo PDF y XML firmado.
                         </div>
                         <div class='details-box'>
                             <div class='details-row'><span class='label'>Tipo Comprobante:</span> <span class='value'>{$tipoDoc}</span></div>
@@ -932,17 +1286,46 @@ class SriFacturaService
             </html>
             ";
 
-            \Illuminate\Support\Facades\Mail::send([], [], function ($message) use ($correoDestino, $asunto, $htmlContent, $fromAddress, $fromName, $xmlPath, $numeroDoc, $tipoDoc) {
+            // Generar PDF en memoria (Resiliente a extensión GD)
+            $pdfContent = null;
+            try {
+                $detalles = $tipoDoc === 'Nota de Crédito' 
+                            ? \App\Models\NotaCreditoDetalle::with('producto')->where('nota_credito_id', $documento->id)->get()
+                            : \App\Models\VentaProducto::with('producto')->where('venta_id', $documento->id)->get();
+                $pagos = $tipoDoc === 'Nota de Crédito' ? [] : \App\Models\VentaPago::where('venta_id', $documento->id)->get();
+
+                $pdfHtml = view('pdf.comprobante', [
+                    'comprobante' => $documento,
+                    'empresa' => $empresaInfo,
+                    'cliente' => $cliente,
+                    'detalles' => $detalles,
+                    'pagos' => $pagos,
+                    'tipoComprobante' => strtoupper($tipoDoc)
+                ])->render();
+
+                $pdfContent = \Barryvdh\DomPDF\Facade\Pdf::loadHTML($pdfHtml)->output();
+            } catch (\Throwable $pdfErr) {
+                Log::warning("No se pudo adjuntar el PDF al correo por falta de librería GD: " . $pdfErr->getMessage());
+            }
+
+            \Illuminate\Support\Facades\Mail::send([], [], function ($message) use ($correoDestino, $asunto, $htmlContent, $fromAddress, $fromName, $xmlPath, $numeroDoc, $tipoDoc, $pdfContent) {
                 $message->from($fromAddress, $fromName)
                         ->to($correoDestino)
                         ->subject($asunto)
                         ->html($htmlContent);
 
+                $prefix = ($tipoDoc === 'Nota de Crédito') ? 'NC_' : 'Factura_';
+                $filenameBase = $prefix . preg_replace('/[^A-Za-z0-9\-]/', '', $numeroDoc);
+
+                // Adjuntar PDF si se generó correctamente
+                if ($pdfContent) {
+                    $message->attachData($pdfContent, $filenameBase . '.pdf', ['mime' => 'application/pdf']);
+                }
+
+                // Adjuntar XML
                 if ($xmlPath && file_exists($xmlPath)) {
-                    $prefix = ($tipoDoc === 'Nota de Crédito') ? 'NC_' : 'Factura_';
-                    $filename = $prefix . preg_replace('/[^A-Za-z0-9\-]/', '', $numeroDoc) . '.xml';
                     $message->attach($xmlPath, [
-                        'as' => $filename,
+                        'as' => $filenameBase . '.xml',
                         'mime' => 'text/xml',
                     ]);
                 }
@@ -961,107 +1344,166 @@ class SriFacturaService
      */
     protected function peticionRecepcionSRI(string $webRecepcion, string $xmlFirmado): array
     {
-        // 1. Intentar PRIMERO con cURL HTTP
-        try {
-            $cleanUrl = strtok($webRecepcion, '?');
-            $b64Xml = base64_encode($xmlFirmado);
-            $payload = '<?xml version="1.0" encoding="UTF-8"?>' .
-                '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ec="http://ec.gob.sri.ws.recepcion">' .
-                '<soapenv:Header/><soapenv:Body><ec:validarComprobante><xml>' . $b64Xml . '</xml></ec:validarComprobante></soapenv:Body>' .
-                '</soapenv:Envelope>';
+        $cleanUrl = strtok($webRecepcion, '?');
+        $b64Xml = base64_encode($xmlFirmado);
+        $payload = '<?xml version="1.0" encoding="UTF-8"?>' .
+            '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ec="http://ec.gob.sri.ws.recepcion">' .
+            '<soapenv:Header/><soapenv:Body><ec:validarComprobante><xml>' . $b64Xml . '</xml></ec:validarComprobante></soapenv:Body>' .
+            '</soapenv:Envelope>';
 
-            $responseXml = $this->ejecutarCurlHttp($cleanUrl, $payload);
+        $maxIntentos = 2;
+        $ultimoError = null;
 
-            $estado = 'DEVUELTA';
-            if (preg_match('/<estado>(.*?)<\/estado>/is', $responseXml, $m)) {
-                $estado = strtoupper(trim($m[1]));
-            }
+        for ($intento = 1; $intento <= $maxIntentos; $intento++) {
+            try {
+                $responseXml = $this->ejecutarCurlHttp($cleanUrl, $payload);
 
-            $mensaje = '';
-            if ($estado !== 'RECIBIDA') {
-                $msgs = [];
-                if (preg_match_all('/<mensaje>(.*?)<\/mensaje>/is', $responseXml, $m1)) {
-                    $msgs[] = implode(' ', array_map('trim', $m1[1]));
+                $estado = 'DEVUELTA';
+                if (preg_match('/<estado>(.*?)<\/estado>/is', $responseXml, $m)) {
+                    $estado = strtoupper(trim($m[1]));
                 }
-                if (preg_match_all('/<informacionAdicional>(.*?)<\/informacionAdicional>/is', $responseXml, $m2)) {
-                    $msgs[] = implode(' ', array_map('trim', $m2[1]));
+
+                $mensaje = '';
+                if ($estado !== 'RECIBIDA') {
+                    $msgs = [];
+                    // 1. Extraer bloques de mensajes con su identificador (ej: [Error 45] ERROR SECUENCIAL REGISTRADO)
+                    if (preg_match_all('/<mensaje\b[^>]*>(.*?)<\/mensaje>/is', $responseXml, $bloquesMensajes)) {
+                        foreach ($bloquesMensajes[1] as $bloque) {
+                            $idMsg  = '';
+                            $txtMsg = '';
+                            if (preg_match('/<identificador>(.*?)<\/identificador>/is', $bloque, $idMatch)) {
+                                $idMsg = trim(strip_tags($idMatch[1]));
+                            }
+                            if (preg_match('/<mensaje>(.*?)<\/mensaje>/is', $bloque, $txtMatch)) {
+                                $txtMsg = trim(strip_tags($txtMatch[1]));
+                            }
+                            if ($txtMsg !== '') {
+                                $msgs[] = ($idMsg !== '') ? "[Error {$idMsg}] {$txtMsg}" : $txtMsg;
+                            }
+                        }
+                    }
+                    if (empty($msgs) && preg_match_all('/<mensaje>(.*?)<\/mensaje>/is', $responseXml, $m1)) {
+                        foreach ($m1[1] as $raw) {
+                            $c = trim(strip_tags($raw));
+                            if ($c !== '') $msgs[] = $c;
+                        }
+                    }
+                    if (preg_match_all('/<informacionAdicional>(.*?)<\/informacionAdicional>/is', $responseXml, $m2)) {
+                        foreach ($m2[1] as $raw2) {
+                            $c = trim(strip_tags($raw2));
+                            if ($c !== '') $msgs[] = $c;
+                        }
+                    }
+                    $mensaje = implode(' | ', array_unique(array_filter($msgs))) ?: 'El comprobante fue devuelto por el SRI.';
                 }
-                $mensaje = implode(' | ', array_filter($msgs)) ?: 'El comprobante fue devuelto por el SRI.';
+
+                return ['estado' => $estado, 'mensaje' => $mensaje];
+
+            } catch (\Throwable $curlException) {
+                $ultimoError = $curlException;
+                Log::warning("cURL Recepción intento {$intento}/{$maxIntentos} falló: " . $curlException->getMessage());
+                if ($intento < $maxIntentos) {
+                    sleep(2);
+                }
             }
+        }
 
-            return ['estado' => $estado, 'mensaje' => $mensaje];
-
-        } catch (\Throwable $curlException) {
-            Log::warning("cURL Recepción falló, intentando respaldo SoapClient: " . $curlException->getMessage());
-
-            // 2. Respaldo SoapClient si cURL falla y la extensión existe
-            if (class_exists('SoapClient')) {
-                $options = ['trace' => 1, 'connection_timeout' => 200];
+        // 2. Respaldo SoapClient si cURL falla y la extensión existe
+        if (class_exists('SoapClient')) {
+            try {
+                $options = ['trace' => 1, 'connection_timeout' => 30];
                 $wsRecep = new \SoapClient($webRecepcion, $options);
-                $resultRecep = $wsRecep->validarComprobante(['xml' => base64_encode($xmlFirmado)]);
+                $resultRecep = $wsRecep->validarComprobante(['xml' => $b64Xml]);
                 $estadoRecep = strtoupper((string)($resultRecep->RespuestaRecepcionComprobante->estado ?? ''));
                 $mensaje = ($estadoRecep !== 'RECIBIDA') ? $this->extraerMensajeSRI($resultRecep) : '';
                 return ['estado' => $estadoRecep, 'mensaje' => $mensaje];
+            } catch (\Throwable $soapErr) {
+                Log::error("Respaldo SoapClient Recepción falló: " . $soapErr->getMessage());
             }
-
-            throw $curlException;
         }
+
+        throw ($ultimoError ?? new \Exception("Error al conectar con la Recepción del SRI."));
     }
 
     /**
-     * Petición de Autorización al SRI: Pruebas PRIMERO con cURL HTTP, y si falla usa SoapClient como respaldo.
+     * Petición de Autorización al SRI: Pruebas con cURL HTTP (con reintentos y tolerancia a procesamiento asíncrono), y si falla usa SoapClient como respaldo.
      */
     protected function peticionAutorizacionSRI(string $webAutoriza, string $claveAcceso): array
     {
-        // 1. Intentar PRIMERO con cURL HTTP
-        try {
-            $cleanUrl = strtok($webAutoriza, '?');
-            $payload = '<?xml version="1.0" encoding="UTF-8"?>' .
-                '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ec="http://ec.gob.sri.ws.autorizacion">' .
-                '<soapenv:Header/><soapenv:Body><ec:autorizacionComprobante><claveAccesoComprobante>' . $claveAcceso . '</claveAccesoComprobante></ec:autorizacionComprobante></soapenv:Body>' .
-                '</soapenv:Envelope>';
+        $cleanUrl = strtok($webAutoriza, '?');
+        $payload = '<?xml version="1.0" encoding="UTF-8"?>' .
+            '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ec="http://ec.gob.sri.ws.autorizacion">' .
+            '<soapenv:Header/><soapenv:Body><ec:autorizacionComprobante><claveAccesoComprobante>' . $claveAcceso . '</claveAccesoComprobante></ec:autorizacionComprobante></soapenv:Body>' .
+            '</soapenv:Envelope>';
 
-            $responseXml = $this->ejecutarCurlHttp($cleanUrl, $payload);
+        $maxIntentos = 3;
+        $ultimoError = null;
 
-            $estado = 'NO AUTORIZADO';
-            if (preg_match('/<estado>(.*?)<\/estado>/is', $responseXml, $m)) {
-                $estado = strtoupper(trim($m[1]));
+        for ($intento = 1; $intento <= $maxIntentos; $intento++) {
+            try {
+                $responseXml = $this->ejecutarCurlHttp($cleanUrl, $payload);
+
+                $estado = 'NO AUTORIZADO';
+                if (preg_match('/<estado>(.*?)<\/estado>/is', $responseXml, $m)) {
+                    $estado = strtoupper(trim($m[1]));
+                }
+
+                // Si el SRI responde con 0 comprobantes (el comprobante aún está en procesamiento)
+                $numComprobantes = null;
+                if (preg_match('/<numeroComprobantes>(.*?)<\/numeroComprobantes>/is', $responseXml, $ncMatch)) {
+                    $numComprobantes = (int)trim($ncMatch[1]);
+                }
+
+                if ($numComprobantes === 0 || $estado === 'EN PROCESO' || $estado === 'PROCESAMIENTO') {
+                    if ($intento < $maxIntentos) {
+                        Log::info("SRI Autorización en cola de procesamiento (intento {$intento}/{$maxIntentos}). Reintentando en 2 segundos...");
+                        sleep(2);
+                        continue;
+                    }
+                }
+
+                $mensaje = '';
+                if ($estado !== 'AUTORIZADO') {
+                    $msgs = [];
+                    if (preg_match_all('/<mensaje>(.*?)<\/mensaje>/is', $responseXml, $m1)) {
+                        $msgs[] = implode(' ', array_map('trim', $m1[1]));
+                    }
+                    if (preg_match_all('/<informacionAdicional>(.*?)<\/informacionAdicional>/is', $responseXml, $m2)) {
+                        $msgs[] = implode(' ', array_map('trim', $m2[1]));
+                    }
+                    $mensaje = implode(' | ', array_filter($msgs)) ?: 'El comprobante no fue autorizado por el SRI.';
+                }
+
+                // Extraer el XML autorizado del comprobante desde el envelope SOAP
+                $xmlAutorizado = $responseXml;
+                if (preg_match('/<comprobante>(.*?)<\/comprobante>/is', $responseXml, $mc)) {
+                    $inner = trim($mc[1]);
+                    if (preg_match('/<\!\[CDATA\[(.*?)\]\]>/is', $inner, $cd)) {
+                        $inner = trim($cd[1]);
+                    }
+                    if (!empty($inner)) {
+                        $xmlAutorizado = $inner;
+                    }
+                }
+
+                return ['estado' => $estado, 'xmlResponse' => $xmlAutorizado, 'mensaje' => $mensaje];
+
+            } catch (\Throwable $curlException) {
+                $ultimoError = $curlException;
+                Log::warning("cURL Autorización intento {$intento}/{$maxIntentos} falló: " . $curlException->getMessage());
+
+                if ($intento < $maxIntentos) {
+                    sleep(2);
+                    continue;
+                }
             }
+        }
 
-            $mensaje = '';
-            if ($estado !== 'AUTORIZADO') {
-                $msgs = [];
-                if (preg_match_all('/<mensaje>(.*?)<\/mensaje>/is', $responseXml, $m1)) {
-                    $msgs[] = implode(' ', array_map('trim', $m1[1]));
-                }
-                if (preg_match_all('/<informacionAdicional>(.*?)<\/informacionAdicional>/is', $responseXml, $m2)) {
-                    $msgs[] = implode(' ', array_map('trim', $m2[1]));
-                }
-                $mensaje = implode(' | ', array_filter($msgs)) ?: 'El comprobante no fue autorizado por el SRI.';
-            }
-
-            // Extraer el XML autorizado del comprobante desde el envelope SOAP
-            $xmlAutorizado = $responseXml;
-            if (preg_match('/<comprobante>(.*?)<\/comprobante>/is', $responseXml, $mc)) {
-                // El comprobante viene como CDATA o texto dentro de la respuesta SOAP
-                $inner = trim($mc[1]);
-                // Decodificar CDATA si existe
-                if (preg_match('/<\!\[CDATA\[(.*?)\]\]>/is', $inner, $cd)) {
-                    $inner = trim($cd[1]);
-                }
-                if (!empty($inner)) {
-                    $xmlAutorizado = $inner;
-                }
-            }
-
-            return ['estado' => $estado, 'xmlResponse' => $xmlAutorizado, 'mensaje' => $mensaje];
-
-        } catch (\Throwable $curlException) {
-            Log::warning("cURL Autorización falló, intentando respaldo SoapClient: " . $curlException->getMessage());
-
-            // 2. Respaldo SoapClient si cURL falla y la extensión existe
-            if (class_exists('SoapClient')) {
-                $options = ['trace' => 1, 'connection_timeout' => 200];
+        // 2. Respaldo SoapClient si cURL falla y la extensión existe
+        if (class_exists('SoapClient')) {
+            try {
+                Log::info("Intentando respaldo SoapClient para autorización...");
+                $options = ['trace' => 1, 'connection_timeout' => 25];
                 $clientA = new \SoapClient($webAutoriza, $options);
                 $resultA = $clientA->autorizacionComprobante([
                     'claveAccesoComprobante' => $claveAcceso
@@ -1070,10 +1512,12 @@ class SriFacturaService
                 $xmlResponse = $clientA->__getLastResponse();
                 $mensaje = ($estadoAut !== 'AUTORIZADO') ? $this->extraerMensajeAutorizacionSRI($resultA) : '';
                 return ['estado' => $estadoAut, 'xmlResponse' => $xmlResponse, 'mensaje' => $mensaje];
+            } catch (\Throwable $soapErr) {
+                Log::error("Respaldo SoapClient también falló: " . $soapErr->getMessage());
             }
-
-            throw $curlException;
         }
+
+        throw ($ultimoError ?? new \Exception("Error al consultar autorización en el SRI."));
     }
 
     protected function ejecutarCurlHttp(string $url, string $payload): string
@@ -1083,16 +1527,21 @@ class SriFacturaService
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 45);
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 20);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_POSTREDIR, 3); // CURL_REDIR_POST_ALL: preserva el cuerpo POST en redirecciones HTTP 301/302
+        curl_setopt($ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4); // Forzar IPv4 para evitar resets de conexión TCP
+        curl_setopt($ch, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2); // Forzar protocolo TLS 1.2
+        curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SRI-Client/1.0');
         curl_setopt($ch, CURLOPT_HTTPHEADER, [
             'Content-Type: text/xml; charset=utf-8',
             'SOAPAction: ""',
             'Content-Length: ' . strlen($payload),
             'Expect:',
+            'Connection: keep-alive',
         ]);
 
         $response = curl_exec($ch);

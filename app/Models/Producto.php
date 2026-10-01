@@ -26,6 +26,22 @@ class Producto extends Model
         'eliminado_por',
     ];
 
+    /**
+     * Genera el código de etiqueta del producto con la estructura: YY-productoId-proveedorId-INT-DEC
+     * Ejemplo: 26-15-3-12-50
+     */
+    public static function generarCodigo(int|string $anio, int|string $productoId, int|string $proveedorId, float $valorBaseEtiqueta): string
+    {
+        $yy = substr((string)$anio, -2);
+        $totalRedondeado = round((float)$valorBaseEtiqueta, 2);
+        $entero = (int) floor($totalRedondeado);
+        $decVal = (int) round(($totalRedondeado - $entero) * 100);
+        $decStr = str_pad((string)$decVal, 2, '0', STR_PAD_LEFT);
+
+        return "{$yy}-{$productoId}-{$proveedorId}-{$entero}-{$decStr}";
+    }
+
+
     /* Relaciones */
     public function lotes()
     {

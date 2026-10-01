@@ -17,3 +17,14 @@ use Illuminate\Support\Facades\Route;
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });
+
+use App\Http\Controllers\Api\ProductoController;
+
+/* Endpoints exclusivos de Productos API (Protegidos con API Key) */
+Route::middleware('api.key')->group(function () {
+    Route::get('/productos',                         [ProductoController::class, 'index']);
+    Route::get('/productos/{id}',                    [ProductoController::class, 'show']);
+    Route::match(['post', 'patch'], '/productos/{id}/disminuir-stock', [ProductoController::class, 'disminuirStock']);
+});
+
+

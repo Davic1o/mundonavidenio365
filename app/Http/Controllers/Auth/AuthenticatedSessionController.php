@@ -37,12 +37,14 @@ class AuthenticatedSessionController extends Controller
 
     // Redirigir según rol
     switch ($user->role) {
+        case 'Superadmin':
+        case 'Admin General':
         case 'Administrador':
             return redirect()->route('admin.dashboard.index'); // Ruta de admin
         case 'Ventas':
             return redirect()->route('ventas.dashboard.index'); // Ruta de ventas
         default:
-            return redirect()->route('dashboard'); // Ruta de usuarios normales
+            return redirect()->route('admin.dashboard.index');
     }
 }
 

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 use Barryvdh\DomPDF\Facade\Pdf;
 
@@ -14,89 +15,72 @@ class ReportesVentasController extends Controller
     public function index(Request $r)
     {
         [$desde, $hasta] = $this->fechas($r->input('desde'), $r->input('hasta'));
-        $estado = $r->input('estado', 'autorizado');
+        $estado = $r->input('estado');
+        if ($estado === '' || strtolower((string)$estado) === 'todos') {
+            $estado = null;
+        } elseif ($estado === null && !$r->has('desde') && !$r->has('forma_pago')) {
+            $estado = 'autorizado';
+        }
+        $formaPago = trim((string)($r->input('forma_pago') ?? $r->input('formaPago') ?? ''));
 
-        [$rows, $totales] = $this->construirFilas($desde, $hasta, $estado);
+        [$rows, $totales] = $this->construirFilas($desde, $hasta, $estado, $formaPago);
 
         return Inertia::render('Admin/Reportes/Ventas', [
             'rows'    => $rows,
             'totales' => $totales,
-            'filtros' => compact('desde','hasta','estado'),
+            'filtros' => [
+                'desde'     => $desde,
+                'hasta'     => $hasta,
+                'estado'    => $estado ?? '',
+                'formaPago' => $formaPago,
+            ],
         ]);
     }
 
-    /** Export CSV */
-    public function exportCsv(Request $r)
+    /** Export EXCEL (.xls) */
+    public function exportExcel(Request $r)
     {
         [$desde, $hasta] = $this->fechas($r->input('desde'), $r->input('hasta'));
-        $estado = $r->input('estado', 'autorizado');
-        [$rows, $totales] = $this->construirFilas($desde, $hasta, $estado);
+        $estado = $r->input('estado');
+        if ($estado === '' || strtolower((string)$estado) === 'todos') {
+            $estado = null;
+        } elseif ($estado === null && !$r->has('desde') && !$r->has('forma_pago')) {
+            $estado = 'autorizado';
+        }
+        $formaPago = trim((string)($r->input('forma_pago') ?? $r->input('formaPago') ?? ''));
+        [$rows, $totales] = $this->construirFilas($desde, $hasta, $estado, $formaPago);
 
-        $filename = 'reporte_pagos_'.now()->format('Ymd_His').'.csv';
-        $headers = [
-            'Content-Type'        => 'text/csv; charset=UTF-8',
+        $filename = 'reporte_pagos_'.now()->format('Ymd_His').'.xls';
+        $html = $this->renderExcelHTML($rows, $totales, ['desde'=>$desde,'hasta'=>$hasta,'estado'=>$estado,'formaPago'=>$formaPago]);
+
+        return response($html, 200, [
+            'Content-Type'        => 'application/vnd.ms-excel; charset=UTF-8',
             'Content-Disposition' => "attachment; filename=\"$filename\"",
-        ];
-        $columns = [
-            'Fecha','N° Venta','Forma de pago','Valor del pago',
-            'Subtotal (pago)','IVA (pago)','Total (pago)',
-            'Subtotal (venta)','IVA (venta)','Total (venta)',
-            'Comisión','Vendedor'
-        ];
+            'Cache-Control'       => 'max-age=0',
+        ]);
+    }
 
-        return response()->stream(function () use ($rows, $totales, $columns) {
-            $out = fopen('php://output', 'w');
-            fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF)); // BOM UTF-8
-
-            // Totales por filas (pagos)
-            fputcsv($out, ['TOTALES (sumando filas/pagos)']);
-            fputcsv($out, ['Subtotal (pagos)','IVA (pagos)','Total (pagos)','Comisión']);
-            fputcsv($out, [
-                number_format($totales['subtotal_pagos'], 2, '.', ''),
-                number_format($totales['iva_pagos'],       2, '.', ''),
-                number_format($totales['total_pagos'],     2, '.', ''),
-                number_format($totales['comision'],        2, '.', ''),
-            ]);
-            // Referencia por ventas únicas (no duplicadas)
-            fputcsv($out, []);
-            fputcsv($out, ['REFERENCIA (único por venta)']);
-            fputcsv($out, ['Subtotal (ventas)','IVA (ventas)','Total (ventas)']);
-            fputcsv($out, [
-                number_format($totales['subtotal_ventas'], 2, '.', ''),
-                number_format($totales['iva_ventas'],       2, '.', ''),
-                number_format($totales['total_ventas'],     2, '.', ''),
-            ]);
-            fputcsv($out, []);
-
-            // Detalle
-            fputcsv($out, $columns);
-            foreach ($rows as $r) {
-                fputcsv($out, [
-                    $r['fecha'], $r['numero'], $r['forma_pago'],
-                    number_format($r['valor_pago'], 2, '.', ''),
-                    number_format($r['subtotal_pago'], 2, '.', ''),
-                    number_format($r['iva_pago'], 2, '.', ''),
-                    number_format($r['total_pago'], 2, '.', ''),
-                    number_format($r['subtotal_venta'], 2, '.', ''),
-                    number_format($r['iva_venta'], 2, '.', ''),
-                    number_format($r['total_venta'], 2, '.', ''),
-                    number_format($r['comision'], 2, '.', ''),
-                    $r['vendedor'],
-                ]);
-            }
-            fclose($out);
-        }, 200, $headers);
+    /** Legacy CSV alias -> exportExcel */
+    public function exportCsv(Request $r)
+    {
+        return $this->exportExcel($r);
     }
 
     /** Export PDF (HTML inline) */
     public function exportPdf(Request $r)
     {
         [$desde, $hasta] = $this->fechas($r->input('desde'), $r->input('hasta'));
-        $estado = $r->input('estado', 'autorizado');
-        [$rows, $totales] = $this->construirFilas($desde, $hasta, $estado);
+        $estado = $r->input('estado');
+        if ($estado === '' || strtolower((string)$estado) === 'todos') {
+            $estado = null;
+        } elseif ($estado === null && !$r->has('desde') && !$r->has('forma_pago')) {
+            $estado = 'autorizado';
+        }
+        $formaPago = trim((string)($r->input('forma_pago') ?? $r->input('formaPago') ?? ''));
+        [$rows, $totales] = $this->construirFilas($desde, $hasta, $estado, $formaPago);
 
-        $html = $this->renderHTML($rows, $totales, ['desde'=>$desde,'hasta'=>$hasta,'estado'=>$estado]);
-        $pdf  = Pdf::loadHTML($html)->setPaper('a4', 'landscape'); // landscape por el ancho
+        $html = $this->renderHTML($rows, $totales, ['desde'=>$desde,'hasta'=>$hasta,'estado'=>$estado,'formaPago'=>$formaPago]);
+        $pdf  = Pdf::loadHTML($html)->setPaper('a4', 'landscape');
 
         return $pdf->download('reporte_pagos_'.now()->format('Ymd_His').'.pdf');
     }
@@ -119,65 +103,90 @@ class ReportesVentasController extends Controller
     private function esTarjeta(?string $codigo, ?string $nombre): bool
     {
         $c = trim((string)$codigo);
-        if (in_array($c, ['19','20'], true)) return true; // 19=Crédito, 20=Débito
+        if (in_array($c, ['16','18','19'], true)) return true;
 
         $n = mb_strtolower((string)$nombre, 'UTF-8');
         $n = strtr($n, ['á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
         return str_contains($n,'tarjeta') || str_contains($n,'credito') || str_contains($n,'debito')
-            || str_contains($n,'visa') || str_contains($n,'mastercard') || str_contains($n,'american');
+            || str_contains($n,'visa') || str_contains($n,'mastercard') || str_contains($n,'american')
+            || str_contains($n,'amex') || str_contains($n,'diners') || str_contains($n,'discover')
+            || str_contains($n,'tc') || str_contains($n,'td') || str_contains($n,'tarj')
+            || str_contains($n,'datafast') || str_contains($n,'medianet') || str_contains($n,'pacificard')
+            || str_contains($n,'payphone');
     }
 
-    /**
-     * Filas: UNA por CADA pago
-     * + prorrateo de subtotal/IVA/total según (valor_pago / total_venta)
-     */
-    private function construirFilas(string $desde, string $hasta, ?string $estado): array
+    /** Categorizar tipo de pago: Efectivo, Transferencia, Tarjeta, Otros */
+    private function categorizarFormaPago(?string $codigo, ?string $nombre): string
     {
-        // Ventas del rango (incluye bases e IVA)
-       $ventasQ = DB::table('ventas')
-    ->leftJoin('users', 'users.id', '=', 'ventas.creada_por')
-    ->select(
-        'ventas.id','ventas.fecha','ventas.estab','ventas.pto_emision','ventas.secuencial',
-        'ventas.subtotal','ventas.impuesto_15','ventas.impuesto_0','ventas.total','ventas.estado',
-        DB::raw("COALESCE(users.name, '—') as vendedor") // <- nombre del usuario
-    )
-    ->whereDate('ventas.fecha','>=',$desde)
-    ->whereDate('ventas.fecha','<=',$hasta);
+        $c = trim((string)$codigo);
+        $n = mb_strtolower((string)$nombre, 'UTF-8');
+        $n = strtr($n, ['á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u']);
 
+        if ($c === '01' || str_contains($n, 'efectivo')) {
+            return 'Efectivo';
+        }
+        if (in_array($c, ['16','18','19'], true) 
+            || str_contains($n, 'tarjeta') || str_contains($n, 'credito') || str_contains($n, 'debito')
+            || str_contains($n, 'visa') || str_contains($n, 'mastercard') || str_contains($n, 'amex')
+            || str_contains($n, 'american') || str_contains($n, 'diners') || str_contains($n, 'discover')
+            || str_contains($n, 'tc') || str_contains($n, 'td') || str_contains($n, 'tarj')
+            || str_contains($n, 'datafast') || str_contains($n, 'medianet') || str_contains($n, 'pacificard')
+            || str_contains($n, 'payphone')) {
+            return 'Tarjeta';
+        }
+        if (in_array($c, ['17','20'], true) || str_contains($n, 'transfer') || str_contains($n, 'deposito') || str_contains($n, 'banco') || str_contains($n, 'cuenta') || str_contains($n, 'cheque')) {
+            return 'Transferencia';
+        }
+        return 'Otros';
+    }
+
+    /** Filas: UNA por CADA pago */
+    private function construirFilas(string $desde, string $hasta, ?string $estado, ?string $formaPagoFiltro = null): array
+    {
+        $ventasQ = DB::table('ventas')
+            ->leftJoin('users', 'users.id', '=', 'ventas.creada_por')
+            ->select(
+                'ventas.id','ventas.fecha','ventas.estab','ventas.pto_emision','ventas.secuencial',
+                'ventas.subtotal','ventas.impuesto_15','ventas.impuesto_0','ventas.total','ventas.estado',
+                DB::raw("COALESCE(users.name, '—') as vendedor")
+            )
+            ->whereDate('ventas.fecha','>=',$desde)
+            ->whereDate('ventas.fecha','<=',$hasta);
 
         if ($estado !== null && $estado !== '') {
-            $ventasQ->where('estado',$estado);
+            $ventasQ->whereRaw('LOWER(ventas.estado) = ?', [strtolower(trim($estado))]);
         }
 
         $ventas = $ventasQ->orderBy('fecha')->get();
         if ($ventas->isEmpty()) {
             return [[], [
-                'subtotal_pagos'=>0, 'iva_pagos'=>0, 'total_pagos'=>0, 'comision'=>0,
+                'total_pagos'=>0, 'pagos_efectivo'=>0, 'pagos_transferencia'=>0, 'pagos_tarjeta'=>0, 'pagos_otros'=>0,
+                'subtotal_pagos'=>0, 'iva_pagos'=>0, 'comision'=>0, 'venta_neta'=>0,
                 'subtotal_ventas'=>0, 'iva_ventas'=>0, 'total_ventas'=>0,
             ]];
         }
 
         $ventaIds = $ventas->pluck('id');
 
-        // Pagos por venta
         $pagos = DB::table('venta_pagos')
             ->select('venta_id','codigo','nombre','valor')
             ->whereIn('venta_id', $ventaIds)
             ->get()
             ->groupBy('venta_id');
 
-        // Tarjetas por venta (comisión real)
-        $tarjetas = DB::table('venta_tarjetas')
-            ->select('venta_id','monto','comision')
-            ->whereIn('venta_id', $ventaIds)
-            ->get()
-            ->groupBy('venta_id');
+        $tarjetas = collect();
+        if (Schema::hasTable('venta_tarjetas')) {
+            $tarjetas = DB::table('venta_tarjetas')
+                ->select('venta_id','monto','comision','tipo_tarjeta')
+                ->whereIn('venta_id', $ventaIds)
+                ->get()
+                ->groupBy('venta_id');
+        }
 
         $rows = [];
-        // Totales de filas (pagos)
         $sumSubPagos = $sumIvaPagos = $sumTotPagos = $sumComision = 0.0;
-        // Totales únicos por venta
         $sumSubVentas = $sumIvaVentas = $sumTotVentas = 0.0;
+        $sumEfectivo = $sumTransferencia = $sumTarjeta = $sumOtros = 0.0;
 
         foreach ($ventas as $v) {
             $vid         = $v->id;
@@ -187,15 +196,9 @@ class ReportesVentasController extends Controller
             $ivaV        = (float)$v->impuesto_15 + (float)$v->impuesto_0;
             $totalV      = max(0.0, (float)$v->total);
 
-            // Sumar únicos por venta
-            $sumSubVentas += $subtotalV;
-            $sumIvaVentas += $ivaV;
-            $sumTotVentas += $totalV;
-
             $pagosVenta    = $pagos->get($vid, collect());
             $tarjetasVenta = $tarjetas->get($vid, collect());
 
-            // Sumas de tarjeta reales
             $sumComTarj = 0.0;
             $sumMonTarj = 0.0;
             foreach ($tarjetasVenta as $t) {
@@ -203,7 +206,18 @@ class ReportesVentasController extends Controller
                 $sumMonTarj += (float)$t->monto;
             }
 
-            // Suma de pagos que son tarjeta (para prorrateo de comisión entre pagos)
+            // Si no hay pagos en venta_pagos pero sí en venta_tarjetas, sintetizamos la fila de pago con tarjeta
+            if ($pagosVenta->isEmpty() && $tarjetasVenta->isNotEmpty()) {
+                $pagosVenta = $tarjetasVenta->map(function ($t) {
+                    $tipo = !empty($t->tipo_tarjeta) ? strtoupper($t->tipo_tarjeta) : 'CRÉDITO';
+                    return (object)[
+                        'codigo' => '19',
+                        'nombre' => 'TARJETA ' . $tipo,
+                        'valor'  => (float)$t->monto,
+                    ];
+                });
+            }
+
             $sumValorPagosTarjeta = 0.0;
             foreach ($pagosVenta as $p) {
                 if ($this->esTarjeta($p->codigo, $p->nombre)) {
@@ -211,36 +225,66 @@ class ReportesVentasController extends Controller
                 }
             }
 
-            // Si no hay pagos, aún así dejamos una fila informativa
             if ($pagosVenta->isEmpty()) {
-                $rows[] = [
-                    'fecha'          => $fechaStr,
-                    'numero'         => $numero,
-                    'forma_pago'     => 'SIN REGISTRO',
-                    'valor_pago'     => 0.00,
-                    'subtotal_pago'  => 0.00,
-                    'iva_pago'       => 0.00,
-                    'total_pago'     => 0.00,
-                    'subtotal_venta' => round($subtotalV, 2),
-                    'iva_venta'      => round($ivaV, 2),
-                    'total_venta'    => round($totalV, 2),
-                    'comision'       => 0.00,
-                    'vendedor'       => (string)$v->vendedor,
-                ];
+                if (empty($formaPagoFiltro)) {
+                    $rows[] = [
+                        'fecha'          => $fechaStr,
+                        'numero'         => $numero,
+                        'forma_pago'     => 'SIN REGISTRO',
+                        'categoria_pago' => 'Otros',
+                        'valor_pago'     => 0.00,
+                        'subtotal_pago'  => 0.00,
+                        'iva_pago'       => 0.00,
+                        'total_pago'     => 0.00,
+                        'subtotal_venta' => round($subtotalV, 2),
+                        'iva_venta'      => round($ivaV, 2),
+                        'total_venta'    => round($totalV, 2),
+                        'comision'       => 0.00,
+                        'vendedor'       => (string)$v->vendedor,
+                    ];
+                    $sumSubVentas += $subtotalV;
+                    $sumIvaVentas += $ivaV;
+                    $sumTotVentas += $totalV;
+                }
                 continue;
             }
 
+            $matchingRowsForSale = [];
             foreach ($pagosVenta as $p) {
                 $valorPago = max(0.0, (float)$p->valor);
                 $factor    = ($totalV > 0) ? min(1.0, $valorPago / $totalV) : 0.0;
 
-                // Prorrateo por pago
                 $subPago = round($subtotalV * $factor, 2);
                 $ivaPago = round($ivaV * $factor, 2);
-                // Total pago: usa el valor del pago registrado (para cuadrar con caja)
                 $totPago = round($valorPago, 2);
 
-                // Comisión (solo pagos de tarjeta)
+                $nombreForma = strtoupper((string)$p->nombre);
+                $categoria = $this->categorizarFormaPago($p->codigo, $p->nombre);
+
+                // Filtro estricto y flexible por forma de pago
+                if (!empty($formaPagoFiltro)) {
+                    $filtroLow = mb_strtolower(trim($formaPagoFiltro), 'UTF-8');
+                    $catLow    = mb_strtolower($categoria, 'UTF-8');
+                    $nomLow    = mb_strtolower($nombreForma, 'UTF-8');
+
+                    $matches = false;
+                    if ($filtroLow === 'tarjeta') {
+                        $matches = ($categoria === 'Tarjeta') || $this->esTarjeta($p->codigo, $p->nombre);
+                    } elseif ($filtroLow === 'efectivo') {
+                        $matches = ($categoria === 'Efectivo') || str_contains($nomLow, 'efectivo');
+                    } elseif ($filtroLow === 'transferencia') {
+                        $matches = ($categoria === 'Transferencia') || str_contains($nomLow, 'transfer') || str_contains($nomLow, 'deposito') || str_contains($nomLow, 'banco');
+                    } elseif ($filtroLow === 'otros') {
+                        $matches = ($categoria === 'Otros');
+                    } else {
+                        $matches = str_contains($catLow, $filtroLow) || str_contains($nomLow, $filtroLow);
+                    }
+
+                    if (!$matches) {
+                        continue;
+                    }
+                }
+
                 $rowComision = 0.0;
                 if ($this->esTarjeta($p->codigo, $p->nombre)) {
                     if ($sumComTarj > 0) {
@@ -251,10 +295,22 @@ class ReportesVentasController extends Controller
                     }
                 }
 
-                $rows[] = [
+                // Acumuladores por forma de pago (solo de los pagos que coinciden con el filtro)
+                if ($categoria === 'Efectivo') $sumEfectivo += $totPago;
+                elseif ($categoria === 'Transferencia') $sumTransferencia += $totPago;
+                elseif ($categoria === 'Tarjeta') $sumTarjeta += $totPago;
+                else $sumOtros += $totPago;
+
+                $sumSubPagos += $subPago;
+                $sumIvaPagos += $ivaPago;
+                $sumTotPagos += $totPago;
+                $sumComision += $rowComision;
+
+                $matchingRowsForSale[] = [
                     'fecha'          => $fechaStr,
                     'numero'         => $numero,
-                    'forma_pago'     => strtoupper((string)$p->nombre),
+                    'forma_pago'     => $nombreForma ?: $categoria,
+                    'categoria_pago' => $categoria,
                     'valor_pago'     => $totPago,
                     'subtotal_pago'  => $subPago,
                     'iva_pago'       => $ivaPago,
@@ -265,45 +321,177 @@ class ReportesVentasController extends Controller
                     'comision'       => $rowComision,
                     'vendedor'       => (string)$v->vendedor,
                 ];
+            }
 
-                // Acumular totales por filas
-                $sumSubPagos += $subPago;
-                $sumIvaPagos += $ivaPago;
-                $sumTotPagos += $totPago;
-                $sumComision += $rowComision;
+            if (!empty($matchingRowsForSale)) {
+                if (!empty($formaPagoFiltro)) {
+                    $mSub = 0.0;
+                    $mIva = 0.0;
+                    $mTot = 0.0;
+                    foreach ($matchingRowsForSale as $mItem) {
+                        $mSub += (float)$mItem['subtotal_pago'];
+                        $mIva += (float)$mItem['iva_pago'];
+                        $mTot += (float)$mItem['total_pago'];
+                    }
+                    $sumSubVentas += $mSub;
+                    $sumIvaVentas += $mIva;
+                    $sumTotVentas += $mTot;
+                } else {
+                    $sumSubVentas += $subtotalV;
+                    $sumIvaVentas += $ivaV;
+                    $sumTotVentas += $totalV;
+                }
+
+                foreach ($matchingRowsForSale as $rowItem) {
+                    $rows[] = $rowItem;
+                }
             }
         }
 
-        // Orden
         usort($rows, fn($a,$b)=>[$a['fecha'],$a['numero'],$a['vendedor'],$a['forma_pago']]
-    <=> [$b['fecha'],$b['numero'],$b['vendedor'],$b['forma_pago']]);
-
+            <=> [$b['fecha'],$b['numero'],$b['vendedor'],$b['forma_pago']]);
 
         $totales = [
-            // Totales que pides "sumados las filas del reporte"
-            'subtotal_pagos' => round($sumSubPagos, 2),
-            'iva_pagos'      => round($sumIvaPagos, 2),
-            'total_pagos'    => round($sumTotPagos, 2),
-            'comision'       => round($sumComision, 2),
-            // Referencia por ventas (único por venta)
-            'subtotal_ventas'=> round($sumSubVentas, 2),
-            'iva_ventas'     => round($sumIvaVentas, 2),
-            'total_ventas'   => round($sumTotVentas, 2),
+            'total_pagos'         => round($sumTotPagos, 2),
+            'pagos_efectivo'      => round($sumEfectivo, 2),
+            'pagos_transferencia' => round($sumTransferencia, 2),
+            'pagos_tarjeta'       => round($sumTarjeta, 2),
+            'pagos_otros'         => round($sumOtros, 2),
+            'subtotal_pagos'      => round($sumSubPagos, 2),
+            'iva_pagos'           => round($sumIvaPagos, 2),
+            'comision'            => round($sumComision, 2),
+            'venta_neta'          => round(max(0, $sumTotPagos - $sumIvaPagos - $sumComision), 2),
+            'subtotal_ventas'     => round($sumSubVentas, 2),
+            'iva_ventas'          => round($sumIvaVentas, 2),
+            'total_ventas'        => round($sumTotVentas, 2),
         ];
 
         return [$rows, $totales];
     }
 
-    /** HTML para PDF (landscape por ancho) */
+    /** Genera HTML estructurado para Excel con formato .xls */
+    private function renderExcelHTML(array $rows, array $tot, array $f): string
+    {
+        $rowsHtml = '';
+        foreach ($rows as $i => $r) {
+            $bg = ($i % 2 === 0) ? '#ffffff' : '#f8fafc';
+            $rowsHtml .= "<tr style='background-color: {$bg};'>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:left;'>{$r['fecha']}</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:left; font-weight:bold;'>{$r['numero']}</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:left;'>{$r['forma_pago']}</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:right; font-weight:bold;'>$" . number_format($r['valor_pago'], 2, '.', '') . "</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:right;'>$" . number_format($r['subtotal_pago'], 2, '.', '') . "</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:right;'>$" . number_format($r['iva_pago'], 2, '.', '') . "</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:right; font-weight:bold;'>$" . number_format($r['total_pago'], 2, '.', '') . "</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:right;'>$" . number_format($r['subtotal_venta'], 2, '.', '') . "</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:right;'>$" . number_format($r['iva_venta'], 2, '.', '') . "</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:right;'>$" . number_format($r['total_venta'], 2, '.', '') . "</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:right; color:#b45309;'>$" . number_format($r['comision'], 2, '.', '') . "</td>
+                <td style='border:1px solid #cbd5e1; padding:6px; text-align:left;'>{$r['vendedor']}</td>
+            </tr>";
+        }
+
+        return '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<!--[if gte mso 9]>
+<xml>
+ <x:ExcelWorkbook>
+  <x:ExcelWorksheets>
+   <x:ExcelWorksheet>
+    <x:Name>Reporte de Pagos</x:Name>
+    <x:WorksheetOptions>
+     <x:DisplayGridlines/>
+    </x:WorksheetOptions>
+   </x:ExcelWorksheet>
+  </x:ExcelWorksheets>
+ </x:ExcelWorkbook>
+</xml>
+<![endif]-->
+<style>
+  body { font-family: Arial, sans-serif; font-size: 11px; }
+  table { border-collapse: collapse; width: 100%; }
+  th { background-color: #047857; color: #ffffff; font-weight: bold; border: 1px solid #065f46; padding: 8px; text-align: center; }
+  td { border: 1px solid #cbd5e1; padding: 6px; }
+  .card-main { background-color: #047857; color: #ffffff; font-size: 14px; font-weight: bold; padding: 10px; text-align: center; }
+  .card-neta { background-color: #0284c7; color: #ffffff; font-size: 14px; font-weight: bold; padding: 10px; text-align: center; }
+  .card-desglose { background-color: #f8fafc; border: 1px solid #cbd5e1; margin-bottom: 12px; }
+  .card-desglose td { padding: 6px 12px; border: 1px solid #cbd5e1; }
+</style>
+</head>
+<body>
+  <h2>REPORTE DE PAGOS Y VENTA NETA REAL</h2>
+  <p><strong>Rango:</strong> ' . $f['desde'] . ' a ' . $f['hasta'] . ' | <strong>Estado:</strong> ' . ($f['estado'] ?: 'TODOS') . ' | <strong>Forma de pago:</strong> ' . ($f['formaPago'] ?: 'TODAS') . '</p>
+  
+  <table style="margin-bottom: 12px;">
+    <tr>
+      <td colspan="6" class="card-main">
+        TOTAL PAGOS RECAUDADOS: $' . number_format($tot['total_pagos'] ?? 0, 2, '.', '') . '
+      </td>
+      <td colspan="6" class="card-neta">
+        💰 VENTA NETA REAL (Pagos - IVA - Comisión): $' . number_format($tot['venta_neta'] ?? 0, 2, '.', '') . '
+      </td>
+    </tr>
+  </table>
+
+  <table class="card-desglose">
+    <tr style="background-color: #f1f5f9; font-weight: bold;">
+      <td colspan="3">💵 Total Efectivo: $' . number_format($tot['pagos_efectivo'] ?? 0, 2, '.', '') . '</td>
+      <td colspan="3">🏦 Total Transferencia: $' . number_format($tot['pagos_transferencia'] ?? 0, 2, '.', '') . '</td>
+      <td colspan="3">💳 Total Tarjetas: $' . number_format($tot['pagos_tarjeta'] ?? 0, 2, '.', '') . '</td>
+      <td colspan="3">🧾 Total Otros: $' . number_format($tot['pagos_otros'] ?? 0, 2, '.', '') . '</td>
+    </tr>
+    <tr>
+      <td colspan="3"><strong>Subtotal Pagos:</strong> $' . number_format($tot['subtotal_pagos'] ?? 0, 2, '.', '') . '</td>
+      <td colspan="3"><strong>- IVA (15%):</strong> $' . number_format($tot['iva_pagos'] ?? 0, 2, '.', '') . '</td>
+      <td colspan="3"><strong>- Comisión Tarjetas:</strong> $' . number_format($tot['comision'] ?? 0, 2, '.', '') . '</td>
+      <td colspan="3" style="background-color:#e0f2fe; color:#0369a1; font-weight:bold;"><strong>= VENTA NETA REAL:</strong> $' . number_format($tot['venta_neta'] ?? 0, 2, '.', '') . '</td>
+    </tr>
+    <tr style="color: #475569; font-style: italic;">
+      <td colspan="12">Referencia (Ventas Únicas): Subtotal $' . number_format($tot['subtotal_ventas'] ?? 0, 2, '.', '') . ' · IVA $' . number_format($tot['iva_ventas'] ?? 0, 2, '.', '') . ' · Total $' . number_format($tot['total_ventas'] ?? 0, 2, '.', '') . '</td>
+    </tr>
+  </table>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Fecha</th>
+        <th>N° Venta</th>
+        <th>Forma de Pago</th>
+        <th>Valor Pago</th>
+        <th>Subtotal (Pago)</th>
+        <th>IVA (Pago)</th>
+        <th>Total (Pago)</th>
+        <th>Subtotal (Venta)</th>
+        <th>IVA (Venta)</th>
+        <th>Total (Venta)</th>
+        <th>Comisión</th>
+        <th>Vendedor</th>
+      </tr>
+    </thead>
+    <tbody>
+      ' . $rowsHtml . '
+    </tbody>
+  </table>
+</body>
+</html>';
+    }
+
+    /** HTML para PDF */
     private function renderHTML(array $rows, array $tot, array $f): string
     {
-        $style = 'table{width:100%;border-collapse:collapse;font-size:11px}
-          th,td{border:1px solid #ccc;padding:6px}
-          th{text-align:center;background:#f6f6f6}
+        $style = 'body{font-family:Arial,sans-serif;margin:15px;color:#1e293b}
+          table{width:100%;border-collapse:collapse;font-size:10px}
+          th,td{border:1px solid #cbd5e1;padding:4px 6px}
+          th{text-align:center;background:#0f172a;color:#ffffff;font-size:10px}
           td:nth-child(1),td:nth-child(2),td:nth-child(3),td:nth-child(12){text-align:left}
           td{text-align:right}
-          h1,h3{margin:0 0 8px 0}
-          .tot td{padding:4px 8px;border:none;}';
+          h1{margin:0 0 4px 0;font-size:16px;color:#0f172a}
+          .subtitle{font-size:11px;color:#475569;margin-bottom:12px;border-bottom:2px solid #0f172a;padding-bottom:6px}
+          .card-tot{background:#047857;color:#ffffff;padding:8px;border-radius:6px;text-align:center;font-size:13px;font-weight:bold;}
+          .card-neta{background:#0284c7;color:#ffffff;padding:8px;border-radius:6px;text-align:center;font-size:13px;font-weight:bold;}
+          .card-sub{background:#f8fafc;border:1px solid #cbd5e1;padding:6px;border-radius:6px;margin-bottom:10px;}
+          .card-sub td{border:none;padding:3px 6px;font-size:10px;}';
 
         $head  = "<tr>
     <th>Fecha</th><th>N° Venta</th><th>Forma de pago</th>
@@ -313,39 +501,58 @@ class ReportesVentasController extends Controller
 </tr>";
 
         $trs   = '';
-        foreach ($rows as $r) {
-     $trs .= "<tr>
-    <td>{$r['fecha']}</td>
-    <td>{$r['numero']}</td>
-    <td>{$r['forma_pago']}</td>
-    <td>".number_format($r['valor_pago'],2,'.','')."</td>
-    <td>".number_format($r['subtotal_pago'],2,'.','')."</td>
-    <td>".number_format($r['iva_pago'],2,'.','')."</td>
-    <td>".number_format($r['total_pago'],2,'.','')."</td>
-    <td>".number_format($r['subtotal_venta'],2,'.','')."</td>
-    <td>".number_format($r['iva_venta'],2,'.','')."</td>
-    <td>".number_format($r['total_venta'],2,'.','')."</td>
-    <td>".number_format($r['comision'],2,'.','')."</td>
-    <td>{$r['vendedor']}</td>
-</tr>";
-
+        if (empty($rows)) {
+            $trs = "<tr><td colspan='12' style='text-align:center; padding:15px; color:#64748b;'>No se encontraron registros de ventas para la consulta seleccionada.</td></tr>";
+        } else {
+            foreach ($rows as $r) {
+                $trs .= "<tr>
+                    <td>{$r['fecha']}</td>
+                    <td style='font-weight:bold;'>{$r['numero']}</td>
+                    <td>{$r['forma_pago']}</td>
+                    <td>".number_format($r['valor_pago'],2,'.','')."</td>
+                    <td>".number_format($r['subtotal_pago'],2,'.','')."</td>
+                    <td>".number_format($r['iva_pago'],2,'.','')."</td>
+                    <td style='font-weight:bold;'>".number_format($r['total_pago'],2,'.','')."</td>
+                    <td>".number_format($r['subtotal_venta'],2,'.','')."</td>
+                    <td>".number_format($r['iva_venta'],2,'.','')."</td>
+                    <td>".number_format($r['total_venta'],2,'.','')."</td>
+                    <td style='color:#b45309;'>".number_format($r['comision'],2,'.','')."</td>
+                    <td>{$r['vendedor']}</td>
+                </tr>";
+            }
         }
-        $totPagos = "<table class='tot' style='margin-bottom:6px'><tr>
-            <td><strong>Subtotal (pagos):</strong> ".number_format($tot['subtotal_pagos'],2,'.','')."</td>
-            <td><strong>IVA (pagos):</strong> ".number_format($tot['iva_pagos'],2,'.','')."</td>
-            <td><strong>Total (pagos):</strong> ".number_format($tot['total_pagos'],2,'.','')."</td>
-            <td><strong>Comisión:</strong> ".number_format($tot['comision'],2,'.','')."</td>
+
+        $lblEstado = !empty($f['estado']) ? strtoupper($f['estado']) : 'TODOS';
+        $lblForma  = !empty($f['formaPago']) ? strtoupper($f['formaPago']) : 'TODAS LAS FORMAS DE PAGO';
+
+        $totPagosHeader = "<table style='margin-bottom:8px; border:none;'><tr>
+            <td class='card-tot' style='width:50%;'>TOTAL PAGOS RECAUDADOS: $" . number_format($tot['total_pagos'] ?? 0, 2, '.', '') . "</td>
+            <td class='card-neta' style='width:50%;'>💰 VENTA NETA REAL: $" . number_format($tot['venta_neta'] ?? 0, 2, '.', '') . "</td>
         </tr></table>";
-        $totVentas = "<table class='tot' style='margin-bottom:12px'><tr>
-            <td><em>Subtotal (ventas únicas):</em> ".number_format($tot['subtotal_ventas'],2,'.','')."</td>
-            <td><em>IVA (ventas únicas):</em> ".number_format($tot['iva_ventas'],2,'.','')."</td>
-            <td><em>Total (ventas únicas):</em> ".number_format($tot['total_ventas'],2,'.','')."</td>
+
+        $totDesglose = "<table class='card-sub'><tr>
+            <td>💵 <strong>Efectivo:</strong> $".number_format($tot['pagos_efectivo'] ?? 0, 2, '.', '')."</td>
+            <td>🏦 <strong>Transferencia:</strong> $".number_format($tot['pagos_transferencia'] ?? 0, 2, '.', '')."</td>
+            <td>💳 <strong>Tarjeta:</strong> $".number_format($tot['pagos_tarjeta'] ?? 0, 2, '.', '')."</td>
+            <td>🧾 <strong>Otros:</strong> $".number_format($tot['pagos_otros'] ?? 0, 2, '.', '')."</td>
+            <td><strong>- IVA:</strong> $".number_format($tot['iva_pagos'] ?? 0, 2, '.', '')."</td>
+            <td><strong>- Comisión:</strong> $".number_format($tot['comision'] ?? 0, 2, '.', '')."</td>
+            <td style='color:#0369a1; font-weight:bold;'>= <strong>Venta Neta:</strong> $".number_format($tot['venta_neta'] ?? 0, 2, '.', '')."</td>
         </tr></table>";
+
+        $totVentas = "<div style='font-size:10px; color:#475569; margin-bottom:8px;'>
+            <em>Referencia Ventas Filtradas: Subtotal $".number_format($tot['subtotal_ventas'] ?? 0,2,'.','')." · IVA $".number_format($tot['iva_ventas'] ?? 0,2,'.','')." · Total $".number_format($tot['total_ventas'] ?? 0,2,'.','')."</em>
+        </div>";
 
         return "<html><head><meta charset='utf-8'><style>$style</style></head><body>
             <h1>Reporte de Pagos por Venta</h1>
-            <h3>Rango: {$f['desde']} a {$f['hasta']} — Estado: ".($f['estado'] ?: 'TODOS')."</h3>
-            $totPagos
+            <div class='subtitle'>
+                <strong>Período:</strong> {$f['desde']} al {$f['hasta']} &nbsp;|&nbsp;
+                <strong>Estado:</strong> {$lblEstado} &nbsp;|&nbsp;
+                <strong>Forma de Pago:</strong> <span style='color:#047857; font-weight:bold;'>{$lblForma}</span>
+            </div>
+            $totPagosHeader
+            $totDesglose
             $totVentas
             <table><thead>$head</thead><tbody>$trs</tbody></table>
         </body></html>";

@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { Head, useForm } from '@inertiajs/react';
 import AdminLayout from '@/Layouts/AdminLayout';
+import useCan from '@/Hooks/useCan';
 import { FiSave, FiRefreshCw } from 'react-icons/fi';
 import SearchableSelect from '@/Components/SearchableSelect';
 
@@ -22,6 +23,8 @@ function fileToBase64(file, cb) {
 }
 
 export default function EmpresaIndex({ empresa }) {
+  const can = useCan();
+  const canEdit = can('empresa.edit');
   const isEdit = Boolean(empresa?.id);
   const fileRef = useRef(null);
 
@@ -565,61 +568,36 @@ export default function EmpresaIndex({ empresa }) {
           </div>
         </div>
 
-        {/* Metadatos */}
-        {isEdit && (
-          <div className="rounded-xl border border-slate-200 bg-white">
-            <div className="p-4 sm:p-6">
-              <h2 className="text-base font-semibold text-slate-900 mb-4">
-                Metadatos
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                <div>
-                  <div className="text-slate-500">ID</div>
-                  <div className="font-medium">{empresa?.id}</div>
-                </div>
-                <div>
-                  <div className="text-slate-500">Creado</div>
-                  <div className="font-medium">
-                    {empresa?.created_at
-                      ? new Date(empresa.created_at).toLocaleString('es-EC')
-                      : '—'}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-slate-500">Actualizado</div>
-                  <div className="font-medium">
-                    {empresa?.updated_at
-                      ? new Date(empresa.updated_at).toLocaleString('es-EC')
-                      : '—'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+
 
         {/* Acciones */}
-        <div className="pt-2 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={restoreForm}
-            className="px-3 py-2 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-          >
-            Restablecer
-          </button>
-          <button
-            type="submit"
-            disabled={processing}
-            className={[
-              'px-3 py-2 rounded-md text-white',
-              processing
-                ? 'bg-primary-400 cursor-not-allowed'
-                : 'bg-primary-600 hover:bg-primary-700',
-            ].join(' ')}
-          >
-            {isEdit ? 'Guardar cambios' : 'Crear empresa'}
-          </button>
-        </div>
+        {canEdit ? (
+          <div className="pt-2 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={restoreForm}
+              className="px-3 py-2 rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            >
+              Restablecer
+            </button>
+            <button
+              type="submit"
+              disabled={processing}
+              className={[
+                'px-3 py-2 rounded-md text-white',
+                processing
+                  ? 'bg-primary-400 cursor-not-allowed'
+                  : 'bg-primary-600 hover:bg-primary-700',
+              ].join(' ')}
+            >
+              {isEdit ? 'Guardar cambios' : 'Crear empresa'}
+            </button>
+          </div>
+        ) : (
+          <div className="pt-2 flex items-center justify-end">
+            <span className="text-sm text-slate-500 italic">Solo lectura: no tienes permisos para editar los datos de la empresa ni del SRI.</span>
+          </div>
+        )}
       </form>
     </AdminLayout>
   );

@@ -48,13 +48,15 @@ class RegisteredUserController extends Controller
 
         Auth::login($user);
 
-       switch ($user->role) {
-        case 'Administrador':
-            return redirect()->route('admin.dashboard.index'); // Ruta de admin
-        case 'Ventas':
-            return redirect()->route('ventas.dashboard.index'); // Ruta de ventas
-        default:
-            return redirect()->route('/'); // Ruta de usuarios normales
-    }
+        switch ($user->role) {
+            case 'Superadmin':
+            case 'Admin General':
+            case 'Administrador':
+                return redirect()->route('admin.dashboard.index'); // Ruta de admin
+            case 'Ventas':
+                return redirect()->route('ventas.dashboard.index'); // Ruta de ventas
+            default:
+                return redirect()->route('admin.dashboard.index');
+        }
     }
 }

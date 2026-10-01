@@ -3,6 +3,7 @@ import { Head, Link, router } from '@inertiajs/react';
 import AdminLayout from '@/Layouts/AdminLayout';
 import { FiSearch, FiPlus, FiEdit2, FiTrash2, FiRefreshCw } from 'react-icons/fi';
 import BaseModal from '@/Components/BaseModal';
+import LoteForm from '@/Pages/Admin/Compras/Components/LoteForm';
 
 /* Helpers paginator */
 const getData = (p) => Array.isArray(p) ? p : (p?.data ?? []);
@@ -78,39 +79,6 @@ function Pagination({ page }) {
 export default function Index({ lotes, filtros, productos = [], proveedores = [] }) {
   const dataList = getData(lotes);
 
-  // Última compra (para sugerir solo código y nombre)
-  const latestRow = useMemo(() => {
-    if (!dataList?.length) return null;
-    const sorted = [...dataList].sort((a, b) => {
-      const da = a?.fecha_compra ? new Date(a.fecha_compra).getTime() : 0;
-      const db = b?.fecha_compra ? new Date(b.fecha_compra).getTime() : 0;
-      if (db !== da) return db - da;
-      return (b?.id ?? 0) - (a?.id ?? 0);
-    });
-    return sorted[0] ?? null;
-  }, [dataList]);
-
-  // Solo enviar producto: { codigo, nombre } cuando es "Nueva compra"
-  function buildInitialFromLast() {
-    const codigo = latestRow?.producto?.codigo ?? null;
-    const nombre = latestRow?.producto?.nombre ?? null;
-
-    if (!codigo && !nombre) {
-      // No hay historial; aún así mandamos estructura vacía por consistencia
-      return {
-        producto: { codigo: '', nombre: '' }
-      };
-    }
-
-    return {
-      // OJO: aquí solo va el producto (código y nombre). Nada más.
-      producto: {
-        codigo: String(codigo ?? ''),
-        nombre: String(nombre ?? ''),
-      },
-    };
-  }
-
   // filtros del controlador: q, codigo, proveedor
   const [q, setQ] = useState({
     q: filtros?.q ?? '',
@@ -136,19 +104,17 @@ export default function Index({ lotes, filtros, productos = [], proveedores = []
 
   // modal
   const [openModal, setOpenModal] = useState(false);
-  const [initial, setInitial] = useState(null); // create/edit
+  const [initial, setInitial] = useState(null); // create: null / edit: row
 
   const isEdit = !!initial?.id;
 
   function openCreate() {
-    // Solo para compra nueva: pasar SOLO código y nombre del último producto
-    const preset = buildInitialFromLast();
-    setInitial(preset);
+    setInitial(null);
     setOpenModal(true);
   }
 
   function openEdit(row) {
-    setInitial(row); // Para editar, seguimos enviando el row completo
+    setInitial(row);
     setOpenModal(true);
   }
 
@@ -279,7 +245,14 @@ export default function Index({ lotes, filtros, productos = [], proveedores = []
         title={isEdit ? 'Editar compra' : 'Registrar compra'}
         maxWidth="4xl"
       >
-
+        <LoteForm
+          key={initial?.id ? `edit-${initial.id}` : 'create'}
+          productos={productos}
+          proveedores={proveedores}
+          initial={initial}
+          onSuccess={() => setOpenModal(false)}
+          onCancel={() => setOpenModal(false)}
+        />
       </BaseModal>
     </AdminLayout>
   );

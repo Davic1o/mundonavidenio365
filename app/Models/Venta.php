@@ -11,11 +11,11 @@ class Venta extends Model
     use HasFactory, SoftDeletes;
 
     protected $fillable = [
-    'cliente_id','fecha','autorizacion','estado',
-    'estab','pto_emision','secuencial','numero',
-    'subtotal','impuesto_15','impuesto_0','descuento','total','creada_por'
-];
-
+        'cliente_id','fecha','autorizacion','estado',
+        'estab','pto_emision','secuencial','numero',
+        'subtotal','impuesto_15','impuesto_0','descuento','total',
+        'creada_por', 'actualizada_por', 'eliminada_por',
+    ];
 
     protected $casts = [
         'fecha'        => 'datetime',
@@ -35,6 +35,16 @@ class Venta extends Model
     public function creador()
     {
         return $this->belongsTo(User::class, 'creada_por');
+    }
+
+    public function actualizadoPor()
+    {
+        return $this->belongsTo(User::class, 'actualizada_por');
+    }
+
+    public function eliminadoPor()
+    {
+        return $this->belongsTo(User::class, 'eliminada_por');
     }
 
     public function productosVendidos()

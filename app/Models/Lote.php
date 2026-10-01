@@ -23,6 +23,7 @@ class Lote extends Model
         'costo_general',
         'precio_compra_final',
         'porcentaje_ganancia',
+        'comision_pct',
         'precio_total',
         'registrado_por',
         'actualizado_por',
@@ -38,6 +39,7 @@ class Lote extends Model
         'costo_general' => 'decimal:2',
         'precio_compra_final' => 'decimal:2',
         'porcentaje_ganancia' => 'decimal:2',
+        'comision_pct' => 'decimal:2',
         'precio_total' => 'decimal:2',
     ];
 

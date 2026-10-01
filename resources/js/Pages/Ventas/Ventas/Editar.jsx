@@ -56,10 +56,9 @@ export default function Editar({ venta, cliente, items }) {
   const [lastAddedIndex, setLastAddedIndex] = useState(null);
 
   // ======= Buscar productos =======
-  async function buscar(queryArg){
+  async function buscar(queryArg, autoAdd = false){
     if(isReadOnly){ return; }
     const query = String(queryArg !== undefined ? queryArg : q).trim();
-    if(!query){ setRes([]); setHighlighted(-1); setLastSearched(''); return; }
     try {
       const r = await fetch(route('ventas.productos.buscar', { q: query }));
       const data = await r.json();
@@ -67,13 +66,18 @@ export default function Editar({ venta, cliente, items }) {
       setRes(arr);
       setLastSearched(query);
 
-      // Si coincide exactamente el código de barras o devuelve un único resultado, agregar de inmediato (Pistoleo)
-      const exactCodeMatch = arr.find(p => String(p.codigo ?? '').toLowerCase() === query.toLowerCase());
-      if (exactCodeMatch) {
-        add(exactCodeMatch);
-      } else if (arr.length === 1) {
-        add(arr[0]);
+      // Si coincide exactamente el código de barras o devuelve un único resultado, y se permite autoAdd (Ej. Enter)
+      if (autoAdd) {
+        const exactCodeMatch = arr.find(p => String(p.codigo ?? '').toLowerCase() === query.toLowerCase());
+        if (exactCodeMatch) {
+          add(exactCodeMatch);
+        } else if (arr.length === 1) {
+          add(arr[0]);
+        } else {
+          setHighlighted(arr.length ? 0 : -1);
+        }
       } else {
+        // Búsqueda manual por botón, solo muestra resultados
         setHighlighted(arr.length ? 0 : -1);
       }
     } catch (e) {
@@ -135,13 +139,13 @@ export default function Editar({ venta, cliente, items }) {
     setRows(s=>s.map((r,ix)=>ix===i?{ ...r, [k]: k==='precio' ? Number(v) : v }:r));
   }
 
-  // cantidad sin restricción de tope
+  // cantidad solo enteros
   function setCantidad(i, raw){
     if(isReadOnly){ return; }
     setRows(s=>s.map((r,ix)=>{
       if(ix!==i) return r;
       if(raw==='') return { ...r, cantidad: '' };
-      let n = Number(raw);
+      let n = parseInt(raw, 10);
       if (isNaN(n)) n = 0;
       return { ...r, cantidad: String(n) };
     }));
@@ -152,8 +156,8 @@ export default function Editar({ venta, cliente, items }) {
     setRows(s=>s.map((r,ix)=>{
       if(ix!==i) return r;
       if(r.cantidad==='') return r; // se valida al guardar
-      let n = Number(r.cantidad);
-      if (isNaN(n) || n<=0) n = 0.0001;
+      let n = parseInt(r.cantidad, 10);
+      if (isNaN(n) || n<=0) n = 1;
       return { ...r, cantidad: String(n) };
     }));
   }
@@ -291,7 +295,7 @@ export default function Editar({ venta, cliente, items }) {
         const p = res[highlighted];
         if (p) { add(p); return; }
       }
-      buscar(q);
+      buscar(q, true); // Auto add on Enter
       return;
     }
     if (!res.length) return;
@@ -357,7 +361,7 @@ export default function Editar({ venta, cliente, items }) {
             />
           </div>
           <button
-            onClick={buscar}
+            onClick={() => buscar(q, false)}
             disabled={isReadOnly}
             className={`rounded-md px-3 py-2 text-sm text-white ${
               isReadOnly ? 'bg-slate-400 cursor-not-allowed' : 'bg-slate-900 hover:bg-slate-800'
@@ -462,8 +466,8 @@ export default function Editar({ venta, cliente, items }) {
                       <input
                         ref={el=>{ if(!refs.current[i]) refs.current[i]=COLS.map(()=>({current:null})); refs.current[i][0].current=el; }}
                         type="number"
-                        min="0.0001"
-                        step="0.0001"
+                        min="1"
+                        step="1"
                         value={r.cantidad}
                         onChange={e=>setCantidad(i,e.target.value)}
                         onBlur={()=>clampCantidadOnBlur(i)}
@@ -555,18 +559,12 @@ export default function Editar({ venta, cliente, items }) {
           </div>
 
           <div className="flex gap-2">
-            {!isReadOnly && normalizeEstado(venta.estado) === 'creada' && (
-              <button
-                onClick={() => {
-                  if (confirm('¿Estás seguro de que deseas eliminar esta venta borrador?')) {
-                    router.delete(route('ventas.ventas.destroy', venta.id));
-                  }
-                }}
-                className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-white bg-rose-600 hover:bg-rose-700"
-              >
-                <FiTrash2/> Eliminar borrador
-              </button>
-            )}
+            <Link
+              href={route('ventas.ventas.vista_cliente', { venta: venta.id })}
+              className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm text-slate-700 bg-slate-100 hover:bg-slate-200"
+            >
+              Regresar al paso anterior
+            </Link>
             <button
               onClick={continuar}
               disabled={isReadOnly || rows.length===0}

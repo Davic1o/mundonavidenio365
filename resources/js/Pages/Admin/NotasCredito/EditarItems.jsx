@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Head, Link, useForm } from "@inertiajs/react";
 import AdminLayout from "@/Layouts/AdminLayout";
+import useCan from "@/Hooks/useCan";
 import { FiCheckSquare, FiSquare, FiRotateCcw, FiSave, FiArrowLeft, FiAlertCircle, FiCheckCircle, FiFileText } from "react-icons/fi";
 
 function fmt(n, d = 2) {
@@ -17,6 +18,9 @@ function toNum(v) {
 }
 
 export default function EditarItems({ auth, nc, venta, cliente, itemsFactura = [], detallesNC = [], flash }) {
+  const can = useCan();
+  const canSave = can('notas_credito.create');
+
   // Pre-cargar mapa de detalles existentes en la NC
   const byPidDetalle = useMemo(() => new Map(detallesNC.map(d => [d.producto_id, d])), [detallesNC]);
 
@@ -450,14 +454,16 @@ export default function EditarItems({ auth, nc, venta, cliente, itemsFactura = [
             >
               <FiArrowLeft className="h-4 w-4" /> Cancelar
             </Link>
-            <button
-              type="submit"
-              disabled={processing}
-              className="inline-flex items-center gap-2 rounded-xl bg-primary-600 px-6 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-primary-700 disabled:opacity-50 transition-colors"
-            >
-              <FiSave className="h-4 w-4" />
-              {processing ? "Guardando…" : "Guardar y Continuar"}
-            </button>
+            {canSave && (
+              <button
+                type="submit"
+                disabled={processing}
+                className="inline-flex items-center gap-2 rounded-xl bg-primary-600 px-6 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-primary-700 disabled:opacity-50 transition-colors"
+              >
+                <FiSave className="h-4 w-4" />
+                {processing ? "Guardando…" : "Guardar y Continuar"}
+              </button>
+            )}
           </div>
         </form>
       </div>

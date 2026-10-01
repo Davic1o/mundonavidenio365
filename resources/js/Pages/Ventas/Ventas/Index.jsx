@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Head, Link, router } from '@inertiajs/react';
 import AdminLayout from '@/Layouts/AdminLayout';
-import { FiSearch, FiPlus, FiEdit2, FiRefreshCw, FiEye, FiCreditCard, FiTrash2 } from 'react-icons/fi';
+import { FiSearch, FiPlus, FiEdit2, FiRefreshCw, FiEye, FiCreditCard, FiTrash2, FiSend } from 'react-icons/fi';
+import useCan from '@/Hooks/useCan';
 
 /* Helpers paginator */
 const getData = (p) => (Array.isArray(p) ? p : (p?.data ?? []));
@@ -84,6 +85,12 @@ function BadgeEstado({ estado }) {
 }
 
 export default function Index({ ventas, filtros }) {
+  const can = useCan();
+  const canCreate = can('ventas.create');
+  const canEdit   = can('ventas.edit');
+  const canDelete = can('ventas.delete');
+  const canSri    = can('ventas.sri');
+
   const dataList = getData(ventas);
 
   const [q, setQ] = useState({
@@ -114,9 +121,23 @@ export default function Index({ ventas, filtros }) {
     });
   }
 
+  const [loadingNuevaVenta, setLoadingNuevaVenta] = useState(false);
+  const [reautorizandoId, setReautorizandoId] = useState(null);
+
   // Acciones
   function nuevaVenta() {
-    router.get(route('ventas.ventas.vista_cliente'));
+    setLoadingNuevaVenta(true);
+    router.get(route('ventas.ventas.vista_cliente'), {}, {
+      onFinish: () => setLoadingNuevaVenta(false),
+    });
+  }
+
+  function reautorizar(id) {
+    setReautorizandoId(id);
+    router.post(route('ventas.ventas.reautorizar', id), {}, {
+      preserveScroll: true,
+      onFinish: () => setReautorizandoId(null),
+    });
   }
 
   /** Bloqueo duro dentro de los handlers */
@@ -154,12 +175,29 @@ export default function Index({ ventas, filtros }) {
 
       {/* Botón crear */}
       <div className="mb-3 flex items-center justify-end">
-        <button
-          onClick={nuevaVenta}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-white bg-primary-600 hover:bg-primary-700"
-        >
-          <FiPlus className="w-4 h-4" /> Nueva venta
-        </button>
+        {canCreate && (
+          <button
+            type="button"
+            onClick={nuevaVenta}
+            disabled={loadingNuevaVenta}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-75 transition shadow-sm"
+          >
+            {loadingNuevaVenta ? (
+              <>
+                <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span>Abriendo nueva venta...</span>
+              </>
+            ) : (
+              <>
+                <FiPlus className="w-4 h-4" />
+                <span>Nueva venta</span>
+              </>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Filtros */}
@@ -176,7 +214,7 @@ export default function Index({ ventas, filtros }) {
                   type="text"
                   value={q.q}
                   onChange={(e) => setQ((s) => ({ ...s, q: e.target.value }))}
-                  placeholder="Ej. Juan, 1712..."
+                  placeholder="Ej. Juan, 1712..., Factura"
                   className="w-full pl-9 rounded-md border-slate-300 focus:border-primary-500 focus:ring-primary-500"
                 />
               </div>
@@ -235,6 +273,7 @@ export default function Index({ ventas, filtros }) {
             <thead className="bg-slate-50 text-slate-600">
               <tr className="[&>th]:px-4 [&>th]:py-3 [&>th]:text-left">
                 <th>Fecha</th>
+                <th>Factura</th>
                 <th>Cliente</th>
                 <th>Estado</th>
                 <th>Subtotal</th>
@@ -246,7 +285,7 @@ export default function Index({ ventas, filtros }) {
             <tbody className="divide-y divide-slate-100">
               {dataList.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-6 text-center text-slate-500">
                     No hay ventas que coincidan con los filtros.
                   </td>
                 </tr>
@@ -263,6 +302,11 @@ export default function Index({ ventas, filtros }) {
                 return (
                   <tr key={row.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">{fmtDate(row.fecha)}</td>
+                    <td className="px-4 py-3 text-slate-700 whitespace-nowrap">
+                      {row.estab && row.pto_emision && row.secuencial
+                        ? `${row.estab}-${row.pto_emision}-${row.secuencial}`
+                        : <span className="text-slate-400">—</span>}
+                    </td>
                     <td className="px-4 py-3">
                       <Link
                         href={route('ventas.ventas.show', row.id)}
@@ -274,6 +318,14 @@ export default function Index({ ventas, filtros }) {
                       {row.cliente_ci_o_ruc ? (
                         <span className="text-slate-500"> — [{row.cliente_ci_o_ruc}]</span>
                       ) : null}
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        <span className="font-semibold text-slate-700">Facturado por:</span> {row.creador_nombre ? `[ID: ${row.creada_por}] ${row.creador_nombre}` : (row.creada_por ? `[ID: ${row.creada_por}]` : '—')}
+                        {row.actualizada_por && row.actualizada_por !== row.creada_por && (
+                          <span className="text-amber-700 ml-2">
+                            • Edit: {row.editor_nombre ? `[ID: ${row.actualizada_por}] ${row.editor_nombre}` : `[ID: ${row.actualizada_por}]`}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <BadgeEstado estado={row.estado} />
@@ -292,7 +344,7 @@ export default function Index({ ventas, filtros }) {
                         </Link>
 
                         {/* Productos */}
-                        {esEditable ? (
+                        {canEdit && esEditable && (
                           <button
                             onClick={() => irProductos(row)}
                             className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-white bg-primary-600 hover:bg-primary-700"
@@ -300,20 +352,10 @@ export default function Index({ ventas, filtros }) {
                           >
                             <FiEdit2 className="w-4 h-4" /> Productos
                           </button>
-                        ) : (
-                          <button
-                            type="button"
-                            aria-disabled
-                            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium border border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed"
-                            title={esAutorizada ? 'Venta autorizada: solo lectura' : 'Venta anulada'}
-                            onClick={(e) => e.preventDefault()}
-                          >
-                            <FiEdit2 className="w-4 h-4" /> Productos
-                          </button>
                         )}
 
                         {/* Pagos */}
-                        {esEditable ? (
+                        {canEdit && esEditable && (
                           <button
                             onClick={() => irPagos(row)}
                             disabled={!puedeIrAPagos}
@@ -322,20 +364,36 @@ export default function Index({ ventas, filtros }) {
                           >
                             <FiCreditCard className="w-4 h-4" /> Pagos
                           </button>
-                        ) : (
+                        )}
+
+                        {/* Volver a autorizar (si no está autorizada ni anulada) */}
+                        {canSri && !esAutorizada && !esAnulada && (
                           <button
                             type="button"
-                            aria-disabled
-                            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium border border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed"
-                            title={esAutorizada ? 'Venta autorizada: solo lectura' : 'Venta anulada'}
-                            onClick={(e) => e.preventDefault()}
+                            onClick={() => reautorizar(row.id)}
+                            disabled={reautorizandoId === row.id}
+                            className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 transition shadow-xs"
+                            title="Reintentar emisión y autorización ante el SRI"
                           >
-                            <FiCreditCard className="w-4 h-4" /> Pagos
+                            {reautorizandoId === row.id ? (
+                              <>
+                                <svg className="animate-spin h-3.5 w-3.5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <span>Autorizando...</span>
+                              </>
+                            ) : (
+                              <>
+                                <FiSend className="w-3.5 h-3.5" />
+                                <span>Volver a autorizar</span>
+                              </>
+                            )}
                           </button>
                         )}
 
                         {/* Eliminar (solo si es borrador / creada) */}
-                        {estadoNorm === 'creada' && (
+                        {canDelete && estadoNorm === 'creada' && (
                           <button
                             onClick={() => window.confirmEliminar(row.id)}
                             className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-white bg-rose-600 hover:bg-rose-700"

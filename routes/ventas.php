@@ -14,6 +14,7 @@ Route::put('/admin/ventas/{venta}',      [VentasController::class, 'update'])->n
 Route::delete('/admin/ventas/{venta}',   [VentasController::class, 'destroy'])->name('admin.ventas.destroy');
 Route::post('/admin/ventas/{venta}/xml', [VentasController::class, 'generarXmlFactura'])->name('admin.ventas.xml');
 Route::post('/admin/{venta}/sri/firmar-enviar', [VentasController::class, 'firmarYEnviarSriFactura'])->name('admin.ventas.sri.firmar_enviar');
+Route::post('/admin/ventas/{venta}/reautorizar', [VentasController::class, 'reautorizarSri'])->name('admin.ventas.reautorizar');
 Route::get('/admin/ventas/nueva/cliente/{venta?}',              [VentasController::class, 'vistaCliente'])->name('admin.ventas.vista_cliente');
 Route::post('/admin/ventas/nueva/cliente/{venta?}',             [VentasController::class, 'iniciarConCliente'])->name('admin.admin.iniciar_con_cliente');
 Route::get('/admin/ventas/{venta}/editar',             [VentasController::class, 'vistaProductos'])->name('admin.ventas.vista_productos');
@@ -35,6 +36,7 @@ Route::put('/ventas/ventas/{venta}',      [VendedorController::class, 'update'])
 Route::delete('/ventas/ventas/{venta}',   [VendedorController::class, 'destroy'])->name('ventas.ventas.destroy');
 Route::post('/ventas/ventas/{venta}/xml', [VendedorController::class, 'generarXmlFactura'])->name('ventas.ventas.xml');
 Route::post('/ventas/{venta}/sri/firmar-enviar', [VendedorController::class, 'firmarYEnviarSriFactura'])->name('ventas.ventas.sri.firmar_enviar');
+Route::post('/ventas/ventas/{venta}/reautorizar', [VendedorController::class, 'reautorizarSri'])->name('ventas.ventas.reautorizar');
 Route::get('/ventas/ventas/nueva/cliente/{venta?}',              [VendedorController::class, 'vistaCliente'])->name('ventas.ventas.vista_cliente');
 Route::post('/ventas/ventas/nueva/cliente/{venta?}',             [VendedorController::class, 'iniciarConCliente'])->name('ventas.ventas.iniciar_con_cliente');
 Route::get('/ventas/ventas/{venta}/editar',             [VendedorController::class, 'vistaProductos'])->name('ventas.ventas.vista_productos');

@@ -37,9 +37,10 @@ class EmisionSriController extends Controller
             return back()->with('error', 'Numeración/clave: '.$e->getMessage());
         }
 
-        // 2) Generar XML (si no existe)
+        // 2) Generar XML (si no existe) y asegurar campo RUC Proveedor
         try {
             $xmlEmitido = $this->construirXmlFactura($venta, $empresa, $cfg);
+            \App\Services\SriFacturaService::asegurarRucProveedorEnArchivoXml($xmlEmitido);
         } catch (\Throwable $e) {
             $this->debugWrite($venta->autorizacion, 'xml_exception.txt', $e->getMessage()."\n\n".$e->getTraceAsString());
             return back()->with('error', 'Error al generar XML: '.$e->getMessage());
@@ -122,7 +123,11 @@ class EmisionSriController extends Controller
     private function construirXmlFactura(Venta $venta, array $empresa, array $cfg): string
     {
         $xmlPath = Storage::path('sri/facturas/emitidas/'.$venta->autorizacion.'.xml');
-        if (is_file($xmlPath)) return $xmlPath;
+        if (is_file($xmlPath)) {
+            // Validar que exista el campo RUC Proveedor; si no existe porque ya se generó, agregarlo al refacturar
+            \App\Services\SriFacturaService::asegurarRucProveedorEnArchivoXml($xmlPath);
+            return $xmlPath;
+        }
 
         $cliente = $venta->cliente_id ? Cliente::find($venta->cliente_id) : null;
         $items   = DB::table('venta_productos')
@@ -248,6 +253,9 @@ class EmisionSriController extends Controller
 
         // infoAdicional
         $infoAd = $doc->createElement('infoAdicional'); $root->appendChild($infoAd);
+        $x = $doc->createElement('campoAdicional', \App\Services\SriFacturaService::RUC_PROVEEDOR);
+        $x->setAttribute('nombre', 'RUC Proveedor');
+        $infoAd->appendChild($x);
         if (!empty($cliente?->telefono)) { $x=$doc->createElement('campoAdicional',$cliente->telefono); $x->setAttribute('nombre','Teléfono'); $infoAd->appendChild($x); }
         if (!empty($cliente?->correo))   { $x=$doc->createElement('campoAdicional',$cliente->correo);   $x->setAttribute('nombre','Email');    $infoAd->appendChild($x); }
         if (!empty($empresa['email']))   { $x=$doc->createElement('campoAdicional',$empresa['email']);  $x->setAttribute('nombre','EmailEmisor'); $infoAd->appendChild($x); }
@@ -255,7 +263,8 @@ class EmisionSriController extends Controller
         // Guardar
         $dir = 'sri/facturas/emitidas';
         if (!Storage::disk('local')->exists($dir)) Storage::disk('local')->makeDirectory($dir);
-        Storage::disk('local')->put($dir.'/'.$venta->autorizacion.'.xml', $doc->saveXML());
+        $xmlFinal = \App\Services\SriFacturaService::asegurarRucProveedorEnXml($doc->saveXML());
+        Storage::disk('local')->put($dir.'/'.$venta->autorizacion.'.xml', $xmlFinal);
 
         return Storage::path($dir.'/'.$venta->autorizacion.'.xml');
     }
